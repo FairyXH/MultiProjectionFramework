@@ -11,7 +11,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class FeatureState {
     private static volatile String lastMessage = "Ready";
     private static volatile String engineLabel = "unknown";
-    private static final AtomicInteger javaHookHits = new AtomicInteger();
     private static final AtomicInteger nativeInstallAttempts = new AtomicInteger();
 
     private FeatureState() {}
@@ -35,10 +34,6 @@ public final class FeatureState {
         lastMessage = String.format(Locale.US, "Multiplier ×%.1f", getMultiplier());
     }
 
-    public static int bumpJavaHookHits() {
-        return javaHookHits.incrementAndGet();
-    }
-
     public static int bumpNativeInstallAttempts() {
         return nativeInstallAttempts.incrementAndGet();
     }
@@ -53,11 +48,10 @@ public final class FeatureState {
 
     public static String summary() {
         return String.format(Locale.US,
-                "Enabled: %s\nMultiplier: \u00d7%.1f\nEngine: %s\nJava hook hits: %d\nNative install attempts: %d\nStatus: %s",
+                "Enabled: %s\nMultiplier: \u00d7%.1f\nEngine: %s\nNative install attempts: %d\nStatus: %s",
                 isEnabled() ? "yes" : "no",
                 getMultiplier(),
                 engineLabel,
-                javaHookHits.get(),
                 nativeInstallAttempts.get(),
                 lastMessage);
     }

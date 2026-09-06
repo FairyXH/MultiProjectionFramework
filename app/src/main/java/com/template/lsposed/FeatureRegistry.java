@@ -10,7 +10,6 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -26,10 +25,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public final class FeatureRegistry {
     private static final String FILE_NAME = TemplateConfig.FEATURE_STATE_FILE_NAME;
+    private static final int MAX_STATE_BYTES = 64 * 1024;
 
     public static final String KEY_ENABLED = "enabled";
     public static final String KEY_MULTIPLIER = "multiplier";
-    public static final String KEY_SAMPLE_ACTIVITY_HOOK = "sample_activity_hook";
     public static final String KEY_NATIVE_HOOKS = "native_hooks";
 
     public enum Type { BOOL, FLOAT }
@@ -83,8 +82,6 @@ public final class FeatureRegistry {
         initialized = true;
 
         register(Feature.bool(KEY_ENABLED, "Module enabled", true));
-        register(Feature.bool(KEY_SAMPLE_ACTIVITY_HOOK, "Log Activity.onResume",
-                TemplateConfig.ENABLE_SAMPLE_ACTIVITY_LOG_HOOK));
         register(Feature.bool(KEY_NATIVE_HOOKS, "Native ShadowHook scaffold",
                 TemplateConfig.ENABLE_NATIVE_SHADOWHOOK));
         register(Feature.number(KEY_MULTIPLIER, "Multiplier", 1f, 1f, 30f));
@@ -148,7 +145,7 @@ public final class FeatureRegistry {
 
     public static void setFloat(String key, float value) {
         Feature f = FEATURES.get(key);
-        if (f == null || f.type != Type.FLOAT) return;
+        if (f == null || f.type != Type.FLOAT || !Float.isFinite(value)) return;
         float clamped = Math.max(f.min, Math.min(f.max, value));
         Float prev = FLOATS.put(key, clamped);
         if (prev == null || prev != clamped) {
@@ -203,7 +200,7 @@ public final class FeatureRegistry {
             first = false;
             Float value = e.getValue();
             sb.append('"').append(escape(e.getKey())).append("\":")
-                    .append(String.format(Locale.US, "%.4f", value == null ? 0f : value));
+                    .append(Float.toString(value == null ? 0f : value));
         }
         sb.append('}');
 
@@ -230,11 +227,16 @@ public final class FeatureRegistry {
     private static synchronized void load() {
         File file = storage;
         if (file == null || !file.exists()) return;
-        ByteArrayOutputStream buf = new ByteArrayOutputStream((int) Math.min(64 * 1024, file.length()));
+        if (file.length() > MAX_STATE_BYTES) return;
+        ByteArrayOutputStream buf = new ByteArrayOutputStream((int) file.length());
         try (FileInputStream in = new FileInputStream(file)) {
             byte[] chunk = new byte[512];
             int n;
-            while ((n = in.read(chunk)) > 0) buf.write(chunk, 0, n);
+            while ((n = in.read(chunk)) > 0) {
+                // Enforce the bound during reading too, in case another process grows the file.
+                if (buf.size() + n > MAX_STATE_BYTES) return;
+                buf.write(chunk, 0, n);
+            }
         } catch (Throwable t) {
             return;
         }
@@ -275,10 +277,11 @@ public final class FeatureRegistry {
         if (f == null) return;
         try {
             if (f.type == Type.BOOL) {
-                BOOLS.put(key, Boolean.parseBoolean(raw));
+                if ("true".equals(raw)) BOOLS.put(key, true);
+                else if ("false".equals(raw)) BOOLS.put(key, false);
             } else {
                 float v = Float.parseFloat(raw);
-                FLOATS.put(key, Math.max(f.min, Math.min(f.max, v)));
+                if (Float.isFinite(v)) FLOATS.put(key, Math.max(f.min, Math.min(f.max, v)));
             }
         } catch (Throwable ignored) {
         }

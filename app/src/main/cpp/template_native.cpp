@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <shadowhook.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -16,20 +17,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Reusable native core for the LSPosed universal template.
 //
-//  This file is engine-AGNOSTIC. It ships three reusable toolkits plus a ShadowHook
-//  smoke-test, so a real module for ANY native/C++ Android app is mostly "fill in the
-//  anchors":
+//  This file is engine-AGNOSTIC. It provides three reusable toolkits for app-specific
+//  native features. No demonstration hooks are installed by the template:
 //    1. A guarded ARM64 byte-patch engine (force a constant return / NOP a check).
 //    2. Version-independent SYMBOL RESOLVERS (string-xref and RTTI) built on native_utils —
 //       resolve a function/vtable at runtime from a stable string or class name instead of a
-//       hardcoded offset, so patches survive app updates / offset shifts.
+//       hardcoded offset. Validate anchors and ABI again for each target update.
 //    3. An auto-resolving, toggleable CODE FEATURE framework (apply AND revert live).
 //
 //  For managed engines (Unity IL2CPP, Godot, Lua, Cocos2d-x) see docs/ENGINE_*.md — those use
 //  the engine's own C API first (il2cpp_*, lua_*, ClassDB) and fall back to the resolvers here.
 //
-//  This is a proven design: the same three toolkits are enough to ship a full mod for a
-//  hardened, stripped native title — see docs/NATIVE_MODDING_PLAYBOOK.md.
+//  Runtime requirements and limitations are in docs/NATIVE_MODDING_PLAYBOOK.md.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #ifndef TEMPLATE_VERBOSE_LOGS
@@ -96,7 +95,8 @@ constexpr uint32_t MOV_W_ZR(int rd) {  // mov Wd, wzr  (i.e. #0)
 }
 
 // Guarded patch: only writes if the current word equals `expected` (the known original), so a
-// wrong/shifted address is skipped instead of corrupting code. Returns true if applied/already-on.
+// differing opcode is skipped. The caller must first establish a valid, mapped, aligned address.
+// Returns true if applied/already-on.
 [[maybe_unused]] bool patch_instruction(uintptr_t addr, uint32_t expected, uint32_t replacement) {
     uint32_t cur = *reinterpret_cast<uint32_t *>(addr);
     if (cur == replacement) return true;
@@ -139,7 +139,8 @@ constexpr uint32_t MOV_W_ZR(int rd) {  // mov Wd, wzr  (i.e. #0)
     if (!s) return 0;
     auto xrefs = native_utils::find_adrp_add_xrefs(info.text_start, info.text_end, s, 8);
     for (uintptr_t x : xrefs) {
-        uintptr_t fn = native_utils::find_function_start(x, 0x1000);
+        uintptr_t fn = native_utils::find_function_start(
+                x, std::min<std::size_t>(0x1000, x - info.text_start));
         if (!fn) continue;
         if (expect_prologue == 0 || *reinterpret_cast<uint32_t *>(fn) == expect_prologue) return fn;
     }
@@ -169,7 +170,8 @@ constexpr uint32_t MOV_W_ZR(int rd) {  // mov Wd, wzr  (i.e. #0)
 //  3. AUTO-RESOLVING CODE FEATURE FRAMEWORK
 //  Each feature = one guarded code patch whose address is resolved at init from a stable anchor.
 //  Toggles genuinely apply (write replacement) AND revert (restore captured original). If
-//  resolution or the opcode guard fails, the feature no-ops (fail-closed — never corrupts code).
+//  resolver must validate the address before capture. Two-word writes are not atomic.
+//  The Java registry is not wired to these entries; a target module must supply that bridge.
 // ═══════════════════════════════════════════════════════════════════════════════
 struct CodeFeature {
     const char *name;
@@ -231,35 +233,6 @@ struct CodeFeature {
 std::array<CodeFeature, 0> g_features{};
 constexpr std::size_t NUM_FEATURES = g_features.size();
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  ShadowHook smoke-test — proves inline hooking works on this build. Replace with a real
-//  hook (shadowhook_hook_func_addr on a resolved code pointer) when you need to intercept,
-//  not just patch a constant. (Kept minimal so it links against Maven ShadowHook 2.0.x.)
-// ═══════════════════════════════════════════════════════════════════════════════
-std::atomic<int> g_getpid_hits{0};
-void *g_getpid_stub = nullptr;
-void *g_getpid_orig = nullptr;
-
-pid_t getpid_proxy() {
-    SHADOWHOOK_STACK_SCOPE();
-    g_getpid_hits.fetch_add(1, std::memory_order_relaxed);
-    return SHADOWHOOK_CALL_PREV(getpid_proxy);
-}
-
-void hook_finished(int error_number, const char *lib_name, const char *sym_name,
-                   void *sym_addr, void *new_addr, void *orig_addr, void *) {
-    if (error_number == 0) {
-        ALOGI("hook ready: %s!%s target=%p",
-              lib_name != nullptr ? lib_name : "<address>",
-              sym_name != nullptr ? sym_name : "<address>", sym_addr);
-    } else {
-        ALOGW("hook failed later: %s!%s errno=%d %s",
-              lib_name != nullptr ? lib_name : "<address>",
-              sym_name != nullptr ? sym_name : "<address>", error_number,
-              shadowhook_to_errmsg(error_number));
-    }
-}
-
 // Hook a RESOLVED code pointer (the real technique for a stripped game function — you can't hook it
 // by symbol name because there is none). Pass an address from the resolvers above (base + rva) and
 // a proxy that uses SHADOWHOOK_STACK_SCOPE()/SHADOWHOOK_CALL_PREV(). `orig` receives the trampoline
@@ -310,19 +283,6 @@ void install_once(const std::string &package_name, const std::string &data_dir) 
         return;
     }
     shadowhook_set_recordable(TEMPLATE_VERBOSE_LOGS != 0);
-    // Smoke-test hook (safe, returns the original value).
-    g_getpid_stub = shadowhook_hook_sym_name_callback_2(
-            "libc.so", "getpid", reinterpret_cast<void *>(getpid_proxy), &g_getpid_orig,
-            SHADOWHOOK_HOOK_WITH_SHARED_MODE, hook_finished, nullptr);
-    ALOGI("getpid hook stub=%p", g_getpid_stub);
-    if (g_getpid_stub == nullptr) {
-        const int error_number = shadowhook_get_errno();
-        ALOGE("getpid smoke hook failed: %d %s", error_number,
-              shadowhook_to_errmsg(error_number));
-        g_install_result.store(error_number, std::memory_order_relaxed);
-        return;
-    }
-
     // Resolve + apply the auto-resolving code features against TARGET_LIB (no-op if unset).
     resolve_and_apply_features();
 
@@ -348,7 +308,6 @@ jstring native_get_shadowhook_records(JNIEnv *env, jclass) {
     std::string out;
     char *records = shadowhook_get_records(SHADOWHOOK_RECORD_ITEM_ALL);
     if (records != nullptr) { out = records; std::free(records); }
-    out += "\ngetpid hits=" + std::to_string(g_getpid_hits.load(std::memory_order_relaxed));
     out += "\n--- Code features (auto-resolved) ---";
     for (const CodeFeature &feature : g_features) {
         out += "\n  " + std::string(feature.name) +

@@ -1,108 +1,97 @@
-# Native modding playbook (works when there's no `dump.cs`)
+# Native analysis and instrumentation workflow
 
-This is the reusable methodology + toolkit this template ships for modding **native / C++ Android
-games** — the hard case where you can't just dump IL2CPP metadata. It was proven end-to-end on a
-hardened, stripped native title (real code features applied and reverted live, all auto-resolving).
-For managed engines see `docs/ENGINE_IL2CPP.md` and `docs/ENGINE_GODOT_LUA_COCOS.md` — but even those
-fall back to the native toolkit here when symbols are stripped.
+Use this workflow for native Android apps you own or are authorized to test. The template provides
+an ARM64 analysis and patch scaffold; it ships no target-specific offsets or enabled code features.
+For managed engines, see [IL2CPP](ENGINE_IL2CPP.md) and [Godot/Lua/Cocos](ENGINE_GODOT_LUA_COCOS.md).
 
-## The core idea: resolve by a *stable anchor*, then *patch the producer*
+## 1. Identify the exact binary and address space
 
-Two principles do most of the work:
+Keep the original base APK and required splits from one app version. Extract the native library
+for the process ABI: a library may live in an ABI split rather than the base APK.
 
-1. **Never hardcode an offset.** App updates and even rebuilds move every address. Anchor on
-   something that *doesn't* move — a **string** the function references, or an **RTTI class name** —
-   and walk to the function at runtime. Then guard the patch by the expected opcode so a shifted
-   anchor fails **closed** (feature disables) instead of corrupting code.
-2. **Patch the producer, not the runtime value.** Chasing a live value is a trap when it's
-   obfuscated, guarded, server-synced, or reallocated each update. Find the *function that changes
-   it* and neutralize that. One reliable line beats a fragile heap-scanning thread.
-
-## Workflow
-
-### 1. Get the target `.so`
-`extractNativeLibs=false` games map the lib from **inside `base.apk`** (it shows as `base.apk`
-`r-xp` regions in `/proc/pid/maps`, not `lib….so`). Pull and extract it:
-```
-adb shell su -c 'cp /data/app/~~*/<pkg>-*/base.apk /data/local/tmp/b.apk'
-adb pull /data/local/tmp/b.apk && unzip -o b.apk 'lib/arm64-v8a/*.so' -d extracted
-export RE_SO=$PWD/extracted/lib/arm64-v8a/libyourgame.so
+```sh
+export RE_SO="$PWD/artifacts/target/lib/arm64-v8a/libtarget.so"
 ```
 
-### 2. Static RE (host) — find anchors + offsets
-The `tools/` Python scripts read any ELF via `RE_SO`:
-- `deep.py dis 0x<rva> <n>` — ARM64 disassembler with LOAD/segment map, ADRP+ADD string comments.
-- `deep.py vtbl 0x<rva>` / `vtbl.py` — resolve vtable slots via `.rela.dyn` addends (in-image value
-  is 0; the addend is the real RVA).
-- `find_str_xref.py 0x<stringVA>` — find the ADRP+ADD site that references a string → its function.
-- `rela.py xref 0x<funcRVA>` — reverse: which vtable slot points to a function.
-- `strings -t x $RE_SO | grep …` — RTTI names (`NN<ClassName>`), `__PRETTY_FUNCTION__`/assert
-  literals — your anchors.
+The host tools support **little-endian ELF64 AArch64 executables/shared libraries**. Their address
+arguments are ELF virtual addresses, before the process load bias. They do not treat file offsets
+as addresses. For example, `strings -t x "$RE_SO"` reports **file offsets**; convert a result before
+passing it to the xref scanner:
 
-Typical hunt: find the class by RTTI name → its vtable → the method slot; **or** find a unique
-assert string a function prints → its containing function.
+```sh
+python3 tools/deep.py va 0x<file-offset>
+python3 tools/find_str_xref.py 0x<elf-virtual-address>
+```
 
-### 3. Live probing (device, root) — `tools/memtool.c`
-Build once with the NDK and push (`aarch64-linux-android30-clang -O2 memtool.c -o memtool`). It's a
-`/proc/pid/mem` instrument ("Frida without Frida") — read/write/scan/diff/freeze live memory to
-*confirm* a theory before you ship a patch:
-- `read/w32/w64/write` — peek/poke.
-- `scan/scanr/scan32/sscan/scanm` — value/string/masked scans (find objects, vtables, values).
-- `snap` + `hunt` — cheat-engine style old→new diff.
-- `modiff <vtableAddr> <sec>` — **decrement detector**: snapshot every `MonitoredObfuscated<int>`-
-  style guard, wait while you play, report which value dropped (finds *the* counter without knowing
-  its value).
-- `freeze` / `mofreeze` — hold a plain / obfuscated (`shadow0^shadow1`) value.
+`deep.py off` converts the other way. `deep.py dis` requires Capstone; the other commands use only
+Python's standard library. See [tools/README.md](../tools/README.md) for installation and command syntax.
 
-Live-test a byte-patch by writing the instruction to `base+rva` over `/proc/pid/mem` (COW) and
-watching the game *before* baking it into the module.
+For a zero-based Android shared object, `runtime_address = dlpi_addr + elf_va`.
+`dl_iterate_phdr` supplies that load bias. A `/proc/<pid>/maps` executable mapping start may include
+an ELF segment offset or an APK file offset; it is not interchangeable with the load bias.
+These distinctions follow the [ELF program-header model](https://refspecs.linuxfoundation.org/elf/gabi4+/ch5.pheader.html).
 
-### 4. Bake it in — auto-resolving, toggleable (see `template_native.cpp`)
-The native core gives you three toolkits:
+## 2. Treat names and patterns as candidates
 
-- **Patcher.** `write_code(addr,word)` (mprotect→memcpy→i-cache flush) and guarded
-  `patch_instruction(addr,expected,replacement)`. ARM64 encoders: `MOV_W0_1` (return true),
-  `MOV_W0_0` (return false), `A64_RET`, `A64_NOP`, `MOV_W(rd,imm)`.
-- **Resolvers** (`native_utils` + `template_native.cpp`), all version-independent:
-  - `resolve_by_string_xref(info, "AssertString", expectedPrologue)` → function by a string it uses.
-  - `resolve_rtti_vtable(info, "24CSomeClass")` → vtable by RTTI name (`24` = `strlen("CSomeClass")`).
-  - `vtable_slot(vt, idx)`, `first_bl_target(fn, lo, hi, n)` — walk from a vtable/method to the
-    concrete callee.
-  - `find_module_info(lib)` derives text/rodata/data bounds from **program headers** (no hardcoded
-    sections); `find_ptr_in_range` walks vtables/RTTI by value (RELATIVE relocs are pre-applied, so
-    a slot literally holds the runtime pointer — no reloc parsing).
-- **Feature framework.** A `CodeFeature{ name, enabled, resolve, nwords, on[] }` resolves at init,
-  captures the original bytes, and `feature_apply(f, on)` writes the replacement (ON) or restores
-  the captured original (OFF) — so mod-menu toggles genuinely **apply *and* revert**. Unresolved /
-  guard-mismatch ⇒ the feature no-ops (fail-closed).
+Use exports, strings, RTTI and disassembly to identify a candidate function. An app update can
+change or remove any of these anchors. Record the app version, ELF build ID, ABI, expected bytes,
+callers and function signature with each result.
 
-Add a feature in ~6 lines: write a `resolve_x()` that returns the address, then append
-Increase the `g_features` `std::array` size, add a
-`CodeFeature{ "x", {true}, resolve_x, 1, {A64_RET, 0}, … }` initializer, and set `TARGET_LIB`.
+- `find_str_xref.py` scans executable LOAD segments for nearby ADRP+ADD/LDR pairs. Its forward
+  window and function-prologue search are heuristics; verify the result in disassembly.
+- `fstart.py` stays within the containing executable segment and searches at most 4 KiB backward.
+  When no recognizable prologue is found, it returns the supplied address as a candidate.
+- `deep.py vtbl`, `vtbl.py` and `rela.py slot` share one parser for ordinary `.rela.dyn`
+  `R_AARCH64_RELATIVE` addends. They report missing relocations explicitly; they do not decode
+  RELR, Android packed relocations, or symbol-based relocations.
+- `deep.py u64` reads raw file-backed bytes. A zero word can still have a relocation; use the
+  relocation commands for vtable slots instead of interpreting that zero as the runtime pointer.
 
-### 5. Verify durably
-Relaunch the game (ASLR moves the base every time) and confirm the module re-resolves and re-applies
-by itself — read the bytes back at `base+rva`. On this emulator the base is the `base.apk`
-`r-xp 00d80000` region start; the module logs `feature X: resolved @…`.
+Do not assume that a recognizable name or opcode proves ownership of the function. Confirm its
+calling convention, argument types, side effects and lifetime before invoking or changing it.
 
-## Gotchas learned the hard way
-- **APK-embedded lib** → resolve base with `dl_iterate_phdr` (`dlpi_addr`), not by lib name in maps.
-- **ASLR** every launch → everything in RVA space, add base at patch time.
-- **MTE-tagged heap pointers** (top byte tag) → mask `& 0x00FFFFFFFFFFFFFF` before deref, or read via
-  `/proc/pid/mem` (ignores tags).
-- **Stripped binary** → no dynsym for game functions; RTTI names + assert strings are your anchors.
-- **Obfuscated/guarded values** (`shadow0^shadow1`, recreated per-update) → don't chase them; patch
-  the producer. Anti-tamper *value* detectors (not code checksums) are the usual guard — neutralize
-  the detector's predicate once (RTTI→vtable→Detect→first BL) and every guarded value is safe.
-- **No `.text` integrity check** is common even in hardened games → byte-patches are invisible; you
-  usually don't need to hook at all.
-- **Server-authoritative state** (inventory counts, currency) reverts on sync → prefer the game's
-  own mechanic (a "free" flag) over forcing the number.
+## 3. Integrate a validated candidate
 
-## When to hook (ShadowHook) vs byte-patch
-- **Byte-patch** for "force a constant / skip a check" — 95% of cheats. No trampoline, nothing to
-  detect, trivially revertible. This is the default here.
-- **ShadowHook** (`shadowhook_hook_func_addr` on a *resolved* code pointer) only when you must
-  **intercept** — read/modify arguments or the return, run your own logic, or trace during RE. The
-  `getpid` demo in `template_native.cpp` is a smoke-test that hooking works on the device; a real
-  hook targets a resolved address, not an exported symbol name.
+`app/src/main/cpp/template_native.cpp` contains optional building blocks:
+
+- `resolve_by_string_xref` and `resolve_rtti_vtable` locate candidates. For a simple unqualified
+  class name, the RTTI length prefix is its byte length: `resolve_rtti_vtable(info, "10CSomeClass")`
+  uses `10 = strlen("CSomeClass")`. Nested names use the corresponding Itanium encoding.
+- `find_module_info` obtains load bias and segment bounds from program headers. Raw C++ scanners
+  require readable memory that remains mapped for the duration of the scan; aggregate segment
+  bounds do not guarantee that gaps between segments are mapped.
+- `patch_instruction` compares one expected instruction before writing. Its input address must
+  already be valid and aligned. `write_code` by itself does not validate that it is the intended
+  function; a successful `mprotect` is not such validation.
+- `CodeFeature` captures original words and `feature_apply` writes replacements or captured
+  originals. The resolver must supply a validated address. Two-word changes are separate writes,
+  so they are not atomic and a second-write failure can leave a partial change.
+
+The template's `g_features` array is empty and `TARGET_LIB` is unset. To add a feature, provide a
+validated resolver, extend that array, select the target library, and implement the settings bridge
+that calls `feature_apply`. The overlay's Java feature registry is **not automatically connected**
+to native `CodeFeature` entries. The existing native toggle gates initial installation; turning it
+off after installation does not unhook or revert native code. Restart the target to reset installed
+scaffolding. Keep hot reload disabled until the module has explicit teardown.
+
+Choose a hook when you need to inspect arguments, call the original, or change a return value.
+Choose a byte edit only when you have established its complete behavior and can manage concurrent
+execution. Both change process state and can be observed by integrity checks; neither provides a
+universal compatibility or invisibility guarantee. See [ShadowHook notes](SHADOWHOOK_NOTES.md).
+
+## 4. Verify in the target process
+
+Build the native helper with the API-28 NDK compiler if using `tools/memtool.c`; its root-only command
+syntax is in [tools/README.md](../tools/README.md). Keep probes confined to your test process.
+A write through `/proc/<pid>/mem` is not by itself proof that a running CPU has observed a changed
+instruction stream; check instruction-cache synchronization as part of a code-patch design.
+
+Before enabling a feature by default, verify startup, installation, at least one invocation,
+disable/re-enable behavior, process restarts, and an app version where the resolver should refuse
+to apply. Read back changed bytes and check crash/tombstone output. Run on each supported ABI and
+Android version; host builds and static matches cannot establish runtime compatibility.
+
+Preserve valid pointer tags when required by the target ABI. Blindly stripping the top byte can
+break [MTE's allocation-tag checks](https://source.android.com/docs/security/test/memory-safety/arm-mte).
+Keep target-specific evidence in an ignored `artifacts/` directory or the appropriate app branch,
+with enough detail to repeat the test.

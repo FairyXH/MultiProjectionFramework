@@ -1,212 +1,193 @@
 #!/usr/bin/env python3
-"""Configure the LSPosed universal template for a new module.
-
-Example:
-  ./tools/configure-template.py \
-    --package com.yourname.yourmodule \
-    --name "Your Module" \
-    --target com.example.target \
-    --author "YourName"
-"""
-
+"""Configure a module after validating all inputs and preparing the complete text edit plan."""
 from __future__ import annotations
 
 import argparse
-import re
-import shutil
+import json
 from pathlib import Path
+import re
+from xml.sax.saxutils import escape
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PACKAGE = "com.template.lsposed"
-DEFAULT_JNI = DEFAULT_PACKAGE.replace(".", "_")
-DEFAULT_NATIVE_LIB = "template_native"
-SKIP_DIRS = {".git", ".gradle", ".idea", ".cxx", "build", ".externalNativeBuild"}
-SKIP_SUFFIXES = {".jar", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".so", ".a", ".zip", ".apk", ".xapk"}
-PACKAGE_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$")
-JAVA_SOURCE_SETS = ("main",)
+PACKAGE_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+")
+NATIVE_LIB_RE = re.compile(r"[a-z][a-z0-9_]*")
+JAVA_KEYWORDS = set("""abstract assert boolean break byte case catch char class const continue
+ default do double else enum extends final finally float for goto if implements import instanceof
+ int interface long native new package private protected public return short static strictfp super
+ switch synchronized this throw throws transient try void volatile while true false null _""".split())
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--package", required=True, help="New module package/applicationId, e.g. com.acme.mod")
-    parser.add_argument("--name", required=True, help="Human-readable module/app name")
-    parser.add_argument("--target", required=True, action="append", help="Target package. Repeat or comma-separate multiple packages")
-    parser.add_argument("--author", default="YourName", help="Author for module.prop")
-    parser.add_argument("--old-package", default=DEFAULT_PACKAGE, help="Current package to replace")
-    parser.add_argument("--native-lib", default=None,
-                        help="Optional new native library short name (e.g. 'audio_util') replacing 'template_native'.")
-    return parser.parse_args()
+def validate_package(value: str, *, java: bool = False) -> str:
+    if not PACKAGE_RE.fullmatch(value) or (java and any(p in JAVA_KEYWORDS for p in value.split("."))):
+        raise ValueError(f"Invalid {'Java ' if java else ''}package name: {value}")
+    return value
+
+
+def single_line(value: str, option: str) -> str:
+    if not value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ValueError(f"{option} must be nonempty text without control characters")
+    return value
 
 
 def normalized_targets(raw: list[str]) -> list[str]:
-    out: list[str] = []
-    for item in raw:
-        for value in item.split(","):
-            value = value.strip()
-            if value and value not in out:
-                out.append(value)
-    if not out:
-        raise SystemExit("At least one --target package is required")
-    for value in out:
-        if not PACKAGE_RE.match(value):
-            raise SystemExit(f"Invalid target package: {value}")
-    return out
+    targets = list(dict.fromkeys(v.strip() for item in raw for v in item.split(",") if v.strip()))
+    if not targets:
+        raise ValueError("At least one --target package is required")
+    return [validate_package(value) for value in targets]
 
 
-def package_path(source_set: str, package: str) -> Path:
-    return ROOT / "app" / "src" / source_set / "java" / Path(package.replace(".", "/"))
+def android_string(value: str) -> str:
+    # Android string escaping happens after XML parsing; both layers must be escaped.
+    value = value.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
+    return escape(value.replace("@", "\\@").replace("?", "\\?"))
 
 
-def move_package_dir(old_package: str, new_package: str) -> None:
-    for source_set in JAVA_SOURCE_SETS:
-        old_path = package_path(source_set, old_package)
-        new_path = package_path(source_set, new_package)
-        if old_path == new_path or not old_path.exists():
-            continue
-        new_path.parent.mkdir(parents=True, exist_ok=True)
-        if new_path.exists():
-            raise SystemExit(f"Destination package path already exists: {new_path}")
-        shutil.move(str(old_path), str(new_path))
+def replace_once(pattern: str, replacement: str, text: str, label: str, flags: int = 0) -> str:
+    updated, count = re.subn(pattern, lambda _: replacement, text, flags=flags)
+    if count != 1:
+        raise ValueError(f"Expected exactly one {label}; found {count}")
+    return updated
 
-        # Clean empty parent directories left behind under this source set's java/ tree.
-        java_root = ROOT / "app" / "src" / source_set / "java"
-        parent = old_path.parent
-        while parent != java_root and parent.exists():
+
+def configure(args: argparse.Namespace) -> str:
+    new_package = validate_package(args.package, java=True)
+    name = single_line(args.name, "--name")
+    author = single_line(args.author, "--author")
+    targets = normalized_targets(args.target)
+    if args.native_lib is not None and not NATIVE_LIB_RE.fullmatch(args.native_lib):
+        raise ValueError("Invalid --native-lib: use lowercase letters, digits and underscores")
+
+    gradle = ROOT / "app/build.gradle.kts"
+    gradle_text = gradle.read_text(encoding="utf-8")
+    namespace = re.search(r'namespace\s*=\s*"([^"]+)"', gradle_text)
+    if namespace is None:
+        raise ValueError("Cannot find the current Android namespace")
+    old_package = validate_package(args.old_package or namespace[1], java=True)
+    if namespace[1] != old_package:
+        raise ValueError("--old-package does not match the current Android namespace")
+    java_root = ROOT / "app/src/main/java"
+    old_dir = java_root / old_package.replace(".", "/")
+    new_dir = java_root / new_package.replace(".", "/")
+    config = old_dir / "TemplateConfig.java"
+    config_text = config.read_text(encoding="utf-8")
+    native_match = re.search(r'NATIVE_LIBRARY_NAME\s*=\s*"([^"]+)"', config_text)
+    if native_match is None or not NATIVE_LIB_RE.fullmatch(native_match[1]):
+        raise ValueError("Cannot find the current native library name in TemplateConfig")
+    old_native = native_match[1]
+    native = args.native_lib or old_native
+
+    def package_text(text: str) -> str:
+        return (text.replace(old_package, new_package)
+                    .replace(old_package.replace(".", "/"), new_package.replace(".", "/")))
+
+    # Restrict edits to template sources/metadata/docs. Never rewrite this tool, caches, or artifacts.
+    paths = [gradle, ROOT / "app/proguard-rules.pro", ROOT / "app/src/main/AndroidManifest.xml"]
+    paths += list((ROOT / "app/src/main/cpp").glob("*.cpp"))
+    paths += list((ROOT / "app/src/main/cpp").glob("*.h"))
+    paths += list((ROOT / "app/src/main/resources/META-INF/xposed").glob("*"))
+    paths += [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+    sources = sorted(old_dir.rglob("*.java"))
+    if not sources:
+        raise ValueError(f"No Java sources found for {old_package}")
+    edits: dict[Path, str] = {}
+    moves: dict[Path, Path] = {}
+
+    def plan(path: Path, text: str) -> None:
+        if path.is_symlink() or not path.resolve().is_relative_to(ROOT):
+            raise ValueError(f"Refusing to edit a path outside the template: {path}")
+        edits[path] = text
+
+    for path in paths + sources:
+        if path.is_symlink() or not path.resolve().is_relative_to(ROOT):
+            raise ValueError(f"Refusing to follow a template source symlink: {path}")
+        text = package_text(path.read_text(encoding="utf-8"))
+        text = text.replace(f"lib{old_native}.so", f"lib{native}.so")
+        destination = new_dir / path.relative_to(old_dir) if path in sources else path
+        # Existing unrelated files must not be overwritten during a package move.
+        if destination != path:
+            if destination.exists():
+                raise ValueError(f"Destination source already exists: {destination}")
+            moves[path] = destination
+        plan(destination, text)
+
+    new_config = moves.get(config, config)
+    text = edits[new_config]
+    target_block = ",\n".join(f'            "{target}"' for target in targets)
+    text = replace_once(r"public static final String\[\] TARGET_PACKAGES = \{.*?\n    \};",
+                        "public static final String[] TARGET_PACKAGES = {\n" + target_block + "\n    };",
+                        text, "TARGET_PACKAGES block", re.S)
+    text = replace_once(r'public static final String MENU_TITLE = "(?:\\.|[^"\\])*";',
+                        "public static final String MENU_TITLE = " + json.dumps(name, ensure_ascii=False) + ";",
+                        text, "MENU_TITLE")
+    text = replace_once(r'public static final String NATIVE_LIBRARY_NAME = "[^"]+";',
+                        f'public static final String NATIVE_LIBRARY_NAME = "{native}";', text, "native library constant")
+    plan(new_config, text)
+
+    cmake = ROOT / "app/src/main/cpp/CMakeLists.txt"
+    cmake_text = cmake.read_text(encoding="utf-8")
+    if not re.search(rf"add_library\(\s*{re.escape(old_native)}\s+SHARED", cmake_text):
+        raise ValueError("CMake target and NATIVE_LIBRARY_NAME disagree; resolve this before configuring")
+    plan(cmake, re.sub(rf"\b{re.escape(old_native)}\b(?!\.cpp)", native, cmake_text))
+
+    metadata = ROOT / "app/src/main/resources/META-INF/xposed"
+    plan(metadata / "scope.list", "\n".join(targets) + "\n")
+    prop = metadata / "module.prop"
+    text = edits[prop]
+    for key, value in (("id", new_package), ("name", name), ("author", author)):
+        # module.prop uses Java-properties escaping, independently of Java/XML source escaping.
+        value = value.replace("\\", "\\\\")
+        text = replace_once(rf"^{key}=.*$", f"{key}={value}", text, f"module.prop {key}", re.M)
+    plan(prop, text)
+
+    strings = ROOT / "app/src/main/res/values/strings.xml"
+    text = strings.read_text(encoding="utf-8")
+    text = replace_once(r'<string name="app_name"[^>]*>.*?</string>',
+                        f'<string name="app_name" formatted="false">{android_string(name)}</string>',
+                        text, "app_name", re.S)
+    ET.fromstring(text)
+    plan(strings, text)
+
+    settings = ROOT / "settings.gradle.kts"
+    # Gradle project IDs reject quotes, slashes and other valid display-name characters.
+    # Keep the internal build identifier independent of the user-visible Android name.
+    text = replace_once(r'rootProject\.name\s*=\s*"(?:\\.|[^"\\])*"',
+                        "rootProject.name = " + json.dumps(new_package),
+                        settings.read_text(encoding="utf-8"), "project name")
+    plan(settings, text)
+
+    # All input, source-layout and destination checks above finish before the first write.
+    for path, text in edits.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists() or path.read_text(encoding="utf-8") != text:
+            path.write_text(text, encoding="utf-8")
+    for source in moves:
+        source.unlink()
+    for source in moves:
+        parent = source.parent
+        while parent != java_root:
             try:
                 parent.rmdir()
             except OSError:
                 break
             parent = parent.parent
-
-
-def should_skip(path: Path) -> bool:
-    rel_parts = path.relative_to(ROOT).parts
-    if any(part in SKIP_DIRS for part in rel_parts):
-        return True
-    if path.suffix.lower() in SKIP_SUFFIXES:
-        return True
-    return False
-
-
-def replace_in_text_files(old_package: str, new_package: str, module_name: str, author: str) -> None:
-    old_jni = old_package.replace(".", "_")
-    new_jni = new_package.replace(".", "_")
-    old_slash = old_package.replace(".", "/")
-    new_slash = new_package.replace(".", "/")
-    replacements = {
-        old_package: new_package,
-        old_jni: new_jni,
-        old_slash: new_slash,
-        "LSPosed Universal Template": module_name,
-        "Universal Module": module_name,
-        "YourName": author,
-    }
-    for path in ROOT.rglob("*"):
-        if not path.is_file() or should_skip(path):
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        new_text = text
-        for old, new in replacements.items():
-            new_text = new_text.replace(old, new)
-        if new_text != text:
-            path.write_text(new_text, encoding="utf-8")
-
-
-def rewrite_scope_files(targets: list[str]) -> None:
-    scope = "\n".join(targets) + "\n"
-    (ROOT / "app" / "src" / "main" / "resources" / "META-INF" / "xposed" / "scope.list").write_text(scope, encoding="utf-8")
-
-
-NATIVE_LIB_RE = re.compile(r"^[a-z][a-z0-9_]*$")
-
-
-def rewrite_native_lib(old_name: str, new_name: str) -> None:
-    if not new_name or new_name == old_name:
-        return
-    if not NATIVE_LIB_RE.match(new_name):
-        raise SystemExit(f"Invalid --native-lib value: {new_name} (use lowercase/digits/underscores)")
-
-    # CMakeLists: rename the project/target token, but keep the implementation
-    # filename template_native.cpp stable. Renaming that reference without also
-    # renaming the source file makes every configured native build fail.
-    cmake_path = ROOT / "app" / "src" / "main" / "cpp" / "CMakeLists.txt"
-    if cmake_path.exists():
-        text = cmake_path.read_text(encoding="utf-8")
-        text = re.sub(rf"\b{re.escape(old_name)}\b(?!\.cpp)", new_name, text)
-        cmake_path.write_text(text, encoding="utf-8")
-
-    # Java usages: System.loadLibrary and the constant in TemplateConfig.
-    java_root = ROOT / "app" / "src" / "main" / "java"
-    for path in java_root.rglob("*.java"):
-        text = path.read_text(encoding="utf-8")
-        updated = text
-        updated = updated.replace(f'System.loadLibrary("{old_name}")',
-                                  f'System.loadLibrary("{new_name}")')
-        updated = re.sub(
-            r'(public static final String NATIVE_LIBRARY_NAME\s*=\s*")[^"]+(";)',
-            rf'\g<1>{new_name}\g<2>', updated)
-        if updated != text:
-            path.write_text(updated, encoding="utf-8")
-
-    # ProGuard and documentation references to lib<old>.so.
-    proguard_path = ROOT / "app" / "proguard-rules.pro"
-    if proguard_path.exists():
-        text = proguard_path.read_text(encoding="utf-8")
-        text = text.replace(f"lib{old_name}.so", f"lib{new_name}.so")
-        proguard_path.write_text(text, encoding="utf-8")
-
-    for path in ROOT.rglob("*"):
-        if not path.is_file() or should_skip(path):
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        updated = text.replace(f"lib{old_name}.so", f"lib{new_name}.so")
-        if updated != text:
-            path.write_text(updated, encoding="utf-8")
-
-
-def rewrite_template_config(targets: list[str], module_name: str) -> None:
-    config_path = ROOT / "app" / "src" / "main" / "java"
-    matches = list(config_path.rglob("TemplateConfig.java"))
-    if not matches:
-        return
-    path = matches[0]
-    text = path.read_text(encoding="utf-8")
-    target_block = ",\n".join(f'            "{target}"' for target in targets)
-    text = re.sub(
-        r"public static final String\[] TARGET_PACKAGES = \{.*?\n    \};",
-        "public static final String[] TARGET_PACKAGES = {\n" + target_block + "\n    };",
-        text,
-        flags=re.S,
-    )
-    text = re.sub(r'public static final String MENU_TITLE = ".*?";',
-                  f'public static final String MENU_TITLE = "{module_name}";', text)
-    path.write_text(text, encoding="utf-8")
+    return native
 
 
 def main() -> None:
-    args = parse_args()
-    if not PACKAGE_RE.match(args.package):
-        raise SystemExit(f"Invalid package name: {args.package}")
-    targets = normalized_targets(args.target)
-
-    move_package_dir(args.old_package, args.package)
-    replace_in_text_files(args.old_package, args.package, args.name, args.author)
-    rewrite_scope_files(targets)
-    rewrite_template_config(targets, args.name)
-    if args.native_lib:
-        rewrite_native_lib(DEFAULT_NATIVE_LIB, args.native_lib)
-
-    print("Configured template")
-    print(f"  package:    {args.package}")
-    print(f"  name:       {args.name}")
-    print(f"  targets:    {', '.join(targets)}")
-    print(f"  native lib: lib{(args.native_lib or DEFAULT_NATIVE_LIB)}.so")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--package", required=True, help="New Java namespace/applicationId")
+    parser.add_argument("--name", required=True, help="Literal module/app display name")
+    parser.add_argument("--target", required=True, action="append", help="Target package; repeat or comma-separate")
+    parser.add_argument("--author", default="YourName")
+    parser.add_argument("--old-package", help="Current namespace; defaults to app/build.gradle.kts")
+    parser.add_argument("--native-lib", help="New native library short name; defaults to the current name")
+    args = parser.parse_args()
+    try:
+        native = configure(args)
+    except (ValueError, OSError, ET.ParseError) as error:
+        parser.error(str(error))
+    print(f"Configured {args.package}: {args.name}\nNative library: lib{native}.so")
 
 
 if __name__ == "__main__":

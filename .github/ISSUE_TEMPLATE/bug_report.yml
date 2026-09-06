@@ -17,7 +17,7 @@ body:
     id: lsposed
     attributes:
       label: Framework and version
-      placeholder: Vector 2.2 or LSPatch 1.0 build 455
+      placeholder: Vector 2.2 or LSPatch 1.2 build 487
   - type: textarea
     id: steps
     attributes:

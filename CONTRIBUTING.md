@@ -8,6 +8,8 @@ Contributions are welcome when they improve the template for authorized research
 - Preserve fail-closed behavior in target processes.
 - Keep release logging quiet by default.
 - Do not add secrets, private app code, or proprietary offsets/signatures.
+- Run `python3 -m unittest discover -s tests -v` for configure, ELF tool, Java contract,
+  native scanner and documentation checks. See `tests/README.md` for requirements.
 - Run `./gradlew :app:assembleDebug :app:assembleRelease :app:lintDebug` before submitting changes.
 
 ## License note

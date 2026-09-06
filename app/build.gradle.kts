@@ -9,13 +9,14 @@ android {
 
     defaultConfig {
         applicationId = "com.template.lsposed"
-        minSdk = 26
+        // Match Vector/LSPatch's Android 9 runtime floor; compileSdk is a build-time requirement.
+        minSdk = 28
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
 
         // ShadowHook supports arm32 and arm64 only. Use an arm64 emulator/device for native hooks.
-        // Java-only libxposed hooks still work after you disable native loading in TemplateConfig.
+        // A Java-only fork must also remove the native build/dependency and ABI filters.
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
@@ -112,7 +113,7 @@ android {
 }
 
 dependencies {
-    // Vector and LSPatch 1.0 both provide libxposed API 102 at runtime. Keep the API out of the APK.
+    // Vector 2.2 and LSPatch 1.2 provide libxposed API 102 at runtime. Keep the API out of the APK.
     compileOnly(libs.libxposed.api)
     compileOnly(libs.androidx.annotation)
     implementation(libs.shadowhook)

@@ -6,17 +6,19 @@ file. This is the dynamic counterpart to the static workflow in
 [`ENGINE_NATIVE_WORKFLOWS.md`](ENGINE_NATIVE_WORKFLOWS.md); hooking uses ShadowHook as set up in
 [`SHADOWHOOK_NOTES.md`](SHADOWHOOK_NOTES.md).
 
-Scope: **arm64-v8a first** (armeabi-v7a works the same way). Authorized research/testing only.
+Scope: **arm64-v8a examples**. ShadowHook also supports armeabi-v7a, but pointer sizes,
+Thumb addresses and calling conventions must be adapted and tested. Authorized research/testing only.
 Keep any per-version fallback artifacts on an app branch, never on `main`.
 
 ---
 
 ## 0. Strategy in one paragraph (read this first)
 
-The single most important fact: **for the large majority of Unity games, the `il2cpp_*` C API is
-still exported from `libil2cpp.so`.** `il2cpp_class_get_method_from_name()` returns a
-`MethodInfo*`, and the **first field of `MethodInfo` is `methodPointer`** — the actual native
-code address — in *every* metadata version. So "hook a managed method by name" reduces to:
+First inspect whether the target exports the `il2cpp_*` C API. The examples below use those
+exports to look up a `MethodInfo*`, then assume a validated target layout whose first field is
+`methodPointer`. Check that assumption against the target's Unity headers or disassembly before
+reading it. A name lookup alone does not establish the structure layout or function ABI.
+With those checks complete, the sequence is:
 
 1. `dlopen("libil2cpp.so", RTLD_NOLOAD)` + `dlsym` the handful of exports we need.
 2. `il2cpp_class_from_name` → `il2cpp_class_get_method_from_name` → read `*(void**)methodInfo`.
@@ -30,8 +32,8 @@ effort — see §2 for what actually works and what does not.
 Two-tier design:
 
 - **Tier A — exports present (default, version-tolerant, "just works by name").**
-  Resolve everything through the exported API. Works Unity 2019 → 2023+ unchanged because the
-  export *contract* is stable even as the metadata format churns.
+  Resolve through exports whose signatures you have checked for the target. This reduces
+  dependence on per-build offsets but does not eliminate ABI/version validation.
 - **Tier B — exports stripped/renamed (protected games).** Fall back to a one-time host-side
   dump reduced to a **minimal name→RVA table** loaded at runtime as `base + rva`, or to an
   in-process metadata parser. Be honest: fully "no-dump, no-offset" against a hardened target is
@@ -72,9 +74,11 @@ static bool find_il2cpp_module(Il2CppModule* out) {
 ```
 
 Note on `dlpi_addr`: it is the **load bias**, not necessarily the address of the ELF header.
-For `base + rva` math (Tier B) that is exactly what you want, because Il2CppDumper RVAs are file
-offsets relative to the preferred load address (0), so runtime `addr = dlpi_addr + rva`. For
-Tier A you do not need the base at all — `dlsym` gives you absolute addresses.
+For the usual Android shared object with preferred base zero, an ELF virtual address becomes
+`runtime_address = dlpi_addr + elf_va`. A raw file offset is different: map it through a file-backed
+PT_LOAD segment first (`elf_va = p_vaddr + file_offset - p_offset`). Check what each dump tool calls
+an RVA before adding the load bias. `tools/deep.py va 0x<file-offset>` performs the file-to-VA
+conversion. For Tier A, `dlsym` already returns a runtime address.
 
 ### 1.2 Resolve the exports with `dlopen(RTLD_NOLOAD)` + `dlsym`
 
@@ -399,13 +403,14 @@ hook it exactly like any native function. ShadowHook is already wired into this 
 (`com.bytedance.android:shadowhook:2.0.1`, `shadowhook::shadowhook`; see
 [`SHADOWHOOK_NOTES.md`](SHADOWHOOK_NOTES.md)).
 
-### 3.1 The `MethodInfo` first-field trick (version-tolerant)
+### 3.1 Read `MethodInfo` only after validating the target layout
 
-`methodPointer` is the **first** member of `MethodInfo` in every metadata version (in v27+ a
-`virtualMethodPointer` was inserted *after* it, so field[0] is unchanged). Therefore:
+The following accessor assumes `methodPointer` is the first member. Check the target's headers
+or disassembly and the pointer's lifetime before using it; metadata version alone is not a
+runtime memory-safety check:
 
 ```cpp
-// Robust across Unity versions: no struct definition required.
+// Requires the validated first-field layout described above.
 static inline void* method_code(const MethodInfo* mi) {
     return mi ? *reinterpret_cast<void* const*>(mi) : nullptr;
 }
@@ -418,8 +423,8 @@ The **compiled** IL2CPP function is not the C# signature. Its native shape is:
 - instance method `T Foo(A a)` → `T foo(Il2CppObject* self, A a, const MethodInfo* method)`
 - static  method `T Bar(A a)` → `T bar(A a, const MethodInfo* method)`
 
-i.e. `this` is prepended for instance methods, and a hidden trailing `const MethodInfo*` is
-**always** appended. Your proxy must match this or the stack/registers will be wrong. Value
+These examples include `this` for instance methods and a trailing `const MethodInfo*`.
+Validate the actual generated function or thunk before declaring its proxy type. Value
 types may pass in registers, on the stack, or via a hidden return buffer — verify the AArch64
 ABI at the site (same warning as the static workflow doc).
 
@@ -682,7 +687,7 @@ Known limitations of this surface (intentional, keep them documented):
 
 ## 5. How to use it from the module
 
-Native side (`app/src/main/cpp/template_native.cpp` is where the smoke hook already lives):
+Native side (add target-specific hooks in `app/src/main/cpp/template_native.cpp`):
 
 ```cpp
 // Called after you have confirmed libil2cpp.so is mapped. IL2CPP libs often load AFTER
@@ -706,7 +711,7 @@ static void on_il2cpp_ready() {
 }
 ```
 
-Wait-for-library sketch (bounded, non-blocking) — reuse the template's existing worker pattern:
+Wait-for-library sketch (bounded, blocking on the worker) — reuse the template's existing worker pattern:
 
 ```cpp
 // pseudo: poll up to ~10s, then give up and log.
@@ -716,7 +721,7 @@ if (m.base) on_il2cpp_ready(); else /* log("libil2cpp.so never mapped") */;
 
 Rules that keep this template-clean and safe:
 
-- Gate every non-smoke hook behind a runtime feature flag; keep patches reversible (wrapper /
+- Gate every app-specific hook behind a runtime feature flag; keep patches reversible (wrapper /
   argument-rewrite preferred over constant-return).
 - Keep any Tier B `NAME→RVA` header on an **app branch** under an ignored `artifacts/`-style
   path; never commit target offsets to `main`.
@@ -727,13 +732,12 @@ Rules that keep this template-clean and safe:
 
 ## 6. Version / robustness notes (arm64 focus)
 
-- **Export API stability (Tier A) is the win.** The `il2cpp_*` C exports we use have kept the
-  same signatures Unity **2019 → 2020 → 2021 → 2022/2023**. The metadata *format* churns
-  (v24 → v27 → v29 → v31) but that is hidden behind the exports, so name-based resolution keeps
-  working across versions without code changes. This is why Tier A is the template default.
-- **`MethodInfo.methodPointer` is field[0] in all versions** — the one struct fact we rely on,
-  and it has never moved (v27+ only *appended* `virtualMethodPointer` after it). Reading
-  `*(void**)methodInfo` is safe everywhere.
+- **Export lookup reduces offset maintenance.** Resolve by name after checking exported signatures
+  and threading requirements for the target version. The examples are not a compatibility test
+  across all Unity releases or customized runtimes.
+- **Validate `MethodInfo` before reading its fields.** The examples assume `methodPointer` is first.
+  A non-null pointer does not prove that assumption, the lifetime, or the calling convention.
+  Confirm all three before using a function pointer.
 - **What breaks, and how to degrade:**
   - Exports stripped/renamed → Tier A `dlsym` returns null → detect in `il2cpp_bind()` and fall
     back to Tier B RVA table (per-version, app branch). Do not pretend Tier A can recover.

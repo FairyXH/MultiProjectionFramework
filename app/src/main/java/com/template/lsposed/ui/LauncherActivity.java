@@ -25,7 +25,7 @@ public final class LauncherActivity extends Activity {
         text.setPadding(dp(18), dp(18), dp(18), dp(18));
         text.setLinksClickable(true);
         text.setMovementMethod(LinkMovementMethod.getInstance());
-        text.setText(getString(R.string.launcher_instructions, firstTarget()));
+        text.setText(getString(R.string.launcher_instructions, getString(R.string.app_name), firstTarget()));
 
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(Color.rgb(14, 14, 20));

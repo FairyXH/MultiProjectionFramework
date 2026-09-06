@@ -21,7 +21,7 @@ It plugs into the existing template pieces:
   See `docs/SHADOWHOOK_NOTES.md`.
 
 > Scope / ethics: same rules as the rest of the template — authorized targets only, keep
-> target-specific offsets and AOB patterns on app-specific branches, gate every non-smoke hook
+> target-specific offsets and AOB patterns on app-specific branches, gate every app-specific hook
 > behind a feature flag. Do not commit game offsets to `main`.
 
 ---
@@ -42,7 +42,7 @@ Every engine below uses the **same resolution ladder**. Prefer the earliest rung
    pointers.
 4. **AOB pattern scan**, keyed by engine version — last resort for stripped, non-virtual,
    non-exported functions. Store the pattern in a version→pattern table so upgrades are a data
-   change, not a code change. (`native_utils::native_pattern_scan`.)
+   change, not a code change. (`native_utils::pattern_scan`.)
 
 Version tolerance = **detect the version first, then pick the resolver**. For script engines
 (Lua) the ABI is discoverable from *which symbols exist*. For native engines (Godot/Cocos) read
@@ -56,15 +56,11 @@ Minimal native resolver used by the snippets below (drop next to `native_utils`)
 #include <cstdint>
 #include <cstddef>
 
-// native_utils already implements module-range + pattern scanning; reuse via these decls,
-// or lift its read_maps()/parse_pattern()/pattern helpers into a shared TU.
-namespace nu {
-    bool   module_range(const char* soname, uintptr_t* base, size_t* size); // from /proc/self/maps
-    void*  pattern_scan(uintptr_t base, size_t size, const char* ida_pattern); // "E9 ?? ?? ?? ??"
-}
+#include "native_utils.h"
 
 // Exported symbol, or nullptr.
 inline void* sym(const char* soname, const char* name) {
+    if (!soname || !name) return nullptr;
     void* h = dlopen(soname, RTLD_NOW | RTLD_NOLOAD);
     if (!h) return nullptr;
     void* p = dlsym(h, name);
@@ -76,11 +72,18 @@ inline void* sym(const char* soname, const char* name) {
 inline void* resolve(const char* soname, const char* symname, const char* pattern) {
     if (void* p = sym(soname, symname)) return p;
     if (!pattern) return nullptr;
-    uintptr_t base = 0; size_t size = 0;
-    if (!nu::module_range(soname, &base, &size)) return nullptr;
-    return nu::pattern_scan(base, size, pattern);
+    auto info = native_utils::find_module_info(soname);
+    if (!info.valid) return nullptr;
+    return reinterpret_cast<void*>(
+            native_utils::pattern_scan(info.text_start, info.text_end, pattern));
 }
 ```
+
+The fallback scans executable bounds and returns an absolute address. It calls the public C++
+helpers declared in `native_utils.h`; no additional `nu::module_range` adapter is required.
+The raw C++ scanner requires a readable, stable interval. If the target has multiple executable
+LOAD segments with unmapped gaps, scan each readable segment separately instead of the aggregate
+`text_start`/`text_end` interval. JNI `NativeUtils.patternScan` checks mappings itself.
 
 All hooks below assume ShadowHook is already `shadowhook_init(SHADOWHOOK_MODE_SHARED, …)`-ed by
 the template, and use the shared-mode proxy convention (`SHADOWHOOK_STACK_SCOPE()` +
@@ -153,18 +156,15 @@ No API needed — read it out of the mapped `.so`:
 ```cpp
 // Godot embeds its version string in .rodata, e.g. "4.2.1.stable.official" / "3.5.3.stable".
 // Scan the module for the "<major>.<minor>.<patch>.stable" shape, or just the leading digit.
-uintptr_t base; size_t size;
-nu::module_range("libgodot_android.so", &base, &size);
-// AOB for the ASCII of ".stable" then look back for the version, or search "godotengine".
-// Coarse 3-vs-4 discriminator that does not need the version string:
-bool is_v4 = sym("libgodot_android.so", "JNI_OnLoad") &&
-             nu::pattern_scan(base, size, /* ascii "GDExtension" */
-                              "47 44 45 78 74 65 6E 73 69 6F 6E");   // "GDExtension"
+auto godot = native_utils::find_module_info("libgodot_android.so");
+// A marker is only a candidate discriminator, not a verified version/ABI declaration.
+bool might_be_v4 = godot.valid && native_utils::find_string_va(
+        godot.rodata_start, godot.rodata_end, "GDExtension") != 0;
 // Godot 3 instead contains "GDNative"/"nativescript" marker strings.
 ```
 
-Both majors export the same JNI class (`org.godotengine.godot.GodotLib`), so the JNI anchor in
-A.3 works for **both 3.x and 4.x**.
+Inspect the target's actual JNI exports and thread model before selecting an anchor. The examples
+below describe builds that expose the named entry; a customized build can register natives directly.
 
 ### A.3 Best hook that needs *no* engine symbols — the per-frame tick
 
@@ -462,11 +462,11 @@ more to work with than Godot:
    - `cocos2d::Director::drawScene()` → `_ZN7cocos2d8Director9drawSceneEv` *(non-virtual)*
    - `cocos2d::Scheduler::update(float)` → `_ZN7cocos2d9Scheduler6updateEf`
    Verify each with `nm -CD libcocos2dcpp.so` on the actual target — presence varies by build.
-2. **JNI anchor (always exported).** `Java_org_cocos2dx_lib_Cocos2dxRenderer_nativeRender` is the
+2. **JNI anchor (when exported by the target build).** `Java_org_cocos2dx_lib_Cocos2dxRenderer_nativeRender` is the
    per-frame entry from the Java `GLSurfaceView`; it does exactly
-   `cocos2d::Director::getInstance()->mainLoop();`. ([Cocos2dxRenderer JNI][cc-jni]) Even when
-   `cocos2d::*` is stripped, this is exported — hook it for a per-frame tick (C.3), or disassemble
-   its prologue to recover the `Director::getInstance` call target and the `mainLoop` vtable slot.
+   `cocos2d::Director::getInstance()->mainLoop();`. ([Cocos2dxRenderer JNI][cc-jni]) Check the actual dynamic symbol table before using it: a fork can rename the entry or use
+   `RegisterNatives` instead of a named JNI export. When present, inspect its calls or use it as
+   a per-frame entry (C.3).
 3. **RTTI / vtable recovery** (for virtual methods when exports are gone): find the type-info name
    string `"N7cocos2d8DirectorE"` in `.rodata`, walk to its `type_info`, then to the vtable that
    references it; virtual slots (`mainLoop`, `setAnimationInterval`, …) follow. `getInstance`

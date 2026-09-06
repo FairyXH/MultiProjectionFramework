@@ -1,13 +1,5 @@
-# Vector and LSPatch 1.0 resolve this entry class by string from META-INF/xposed/java_init.list.
+# Vector and LSPatch 1.2 resolve this entry class by string from META-INF/xposed/java_init.list.
 -keep class com.template.lsposed.ModuleEntry { *; }
-
-# libxposed framework callbacks invoked reflectively by the loader.
--keepclassmembers class com.template.lsposed.ModuleEntry {
-    public void onModuleLoaded(...);
-    public void onPackageLoaded(...);
-    public void onPackageReady(...);
-    public void onSystemServerStarting(...);
-}
 
 # RegisterNatives binds these method names as strings in JNI_OnLoad (template_native.cpp).
 # If you rename any of them, update the native method table too.
@@ -19,9 +11,5 @@
     public static final java.lang.String KEY_*;
 }
 
-# libxposed API is supplied by Vector/LSPatch at runtime, but R8 still sees the base class.
+# libxposed API is compileOnly: it is supplied by Vector/LSPatch, not packaged or kept by R8.
 -dontwarn io.github.libxposed.api.**
--keep class io.github.libxposed.api.** { *; }
-
-# Keep META-INF/xposed/* filenames untouched.
--adaptresourcefilenames **.list,**.prop

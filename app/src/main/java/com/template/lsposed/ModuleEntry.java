@@ -1,7 +1,6 @@
 package com.template.lsposed;
 
 import android.annotation.SuppressLint;
-import android.app.Activity;
 import android.app.Application;
 import android.content.Context;
 import android.util.Log;
@@ -14,17 +13,15 @@ import io.github.libxposed.api.XposedModule;
 /**
  * Modern libxposed API 102 entry point.
  *
- * <p>Registered in {@code META-INF/xposed/java_init.list}. Vector and LSPatch 1.0 call this class in
+ * <p>Registered in {@code META-INF/xposed/java_init.list}. Vector and LSPatch 1.2 call this class in
  * each scoped target process. Process-level filtering is enforced here (see
  * {@link TemplateConfig}) so the module does not bloat satellite processes such as {@code :push},
  * {@code :pushservice}, {@code :gameservice}, or dedicated anti-cheat processes.</p>
  */
 public final class ModuleEntry extends XposedModule {
-    private volatile String packageName;
     private volatile String processName;
     private volatile boolean applicationAttachHookInstalled;
     private volatile boolean applicationContextReady;
-    private volatile boolean activityHookInstalled;
 
     @Override
     public void onModuleLoaded(ModuleLoadedParam param) {
@@ -55,24 +52,19 @@ public final class ModuleEntry extends XposedModule {
         String pkg = param.getPackageName();
         String proc = processName != null ? processName : pkg;
         if (!TemplateConfig.shouldHookProcess(pkg, proc)) return;
-        packageName = pkg;
-
         if (TemplateConfig.VERBOSE_LOGS) {
-            log(Log.INFO, TemplateConfig.LOG_TAG, phase + " " + packageName
+            log(Log.INFO, TemplateConfig.LOG_TAG, phase + " " + pkg
                     + " process=" + proc
                     + " firstPackage=" + param.isFirstPackage()
                     + " dataDir=" + param.getApplicationInfo().dataDir);
         }
 
         installApplicationAttachHook();
-        // Install always; the hook itself checks the registry so users can flip it live.
-        installActivityResumeHook();
     }
 
     @SuppressLint("DiscouragedPrivateApi") // Xposed needs this stable pre-Activity context handoff.
     private synchronized void installApplicationAttachHook() {
         if (applicationAttachHookInstalled) return;
-        applicationAttachHookInstalled = true;
         try {
             Method attach = Application.class.getDeclaredMethod("attach", Context.class);
             attach.setAccessible(true);
@@ -95,6 +87,8 @@ public final class ModuleEntry extends XposedModule {
                         }
                         return result;
                     });
+            // A failure in onPackageLoaded must leave onPackageReady able to retry.
+            applicationAttachHookInstalled = true;
             if (TemplateConfig.VERBOSE_LOGS) {
                 log(Log.INFO, TemplateConfig.LOG_TAG, "Hooked Application.attach");
             }
@@ -113,44 +107,4 @@ public final class ModuleEntry extends XposedModule {
         Bootstrap.start(appContext);
     }
 
-    private synchronized void installActivityResumeHook() {
-        if (activityHookInstalled) return;
-        activityHookInstalled = true;
-        try {
-            Method onResume = Activity.class.getDeclaredMethod("onResume");
-            onResume.setAccessible(true);
-            hook(onResume)
-                    .setPriority(XposedInterface.PRIORITY_LOWEST)
-                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
-                    .intercept(chain -> {
-                        Object result = chain.proceed();
-                        try {
-                            if (!FeatureRegistry.getBool(FeatureRegistry.KEY_ENABLED)) return result;
-                            if (!FeatureRegistry.getBool(FeatureRegistry.KEY_SAMPLE_ACTIVITY_HOOK)) return result;
-                            int hits = FeatureState.bumpJavaHookHits();
-                            Object thiz = chain.getThisObject();
-                            String activityName = thiz != null ? thiz.getClass().getName() : "<null>";
-                            FeatureState.setLastMessage("Activity.onResume #" + hits + ": " + activityName);
-                            if (TemplateConfig.VERBOSE_LOGS) {
-                                log(Log.INFO, TemplateConfig.LOG_TAG,
-                                        "Activity.onResume #" + hits + " -> " + activityName);
-                            }
-                        } catch (Throwable t) {
-                            if (TemplateConfig.VERBOSE_LOGS) {
-                                log(Log.ERROR, TemplateConfig.LOG_TAG,
-                                        "Activity.onResume post-hook failed", t);
-                            }
-                        }
-                        return result;
-                    });
-            deoptimize(onResume);
-            if (TemplateConfig.VERBOSE_LOGS) {
-                log(Log.INFO, TemplateConfig.LOG_TAG, "Hooked Activity.onResume sample");
-            }
-        } catch (Throwable t) {
-            if (TemplateConfig.VERBOSE_LOGS) {
-                log(Log.ERROR, TemplateConfig.LOG_TAG, "Could not hook Activity.onResume", t);
-            }
-        }
-    }
 }

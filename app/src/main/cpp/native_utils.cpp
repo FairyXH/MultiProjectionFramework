@@ -230,6 +230,24 @@ bool parse_pattern(const std::string &pattern, Pattern &out) {
     return !out.bytes.empty();
 }
 
+// Shared matcher for the checked JNI mapping scan and the caller-bounded C++ scan.
+uintptr_t scan_pattern(uintptr_t start, uintptr_t end, const Pattern &pattern) {
+    if (start == 0 || end <= start || pattern.bytes.empty() || end - start < pattern.bytes.size()) return 0;
+    const auto *data = reinterpret_cast<const uint8_t *>(start);
+    const std::size_t last = end - start - pattern.bytes.size();
+    for (std::size_t offset = 0; offset <= last; ++offset) {
+        bool matches = true;
+        for (std::size_t i = 0; i < pattern.bytes.size(); ++i) {
+            if (pattern.mask[i] && data[offset + i] != pattern.bytes[i]) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) return start + offset;
+    }
+    return 0;
+}
+
 jlongArray native_find_module(JNIEnv *env, jclass, jstring name_j) {
     std::string name = jstring_to_string(env, name_j);
     jlongArray out = env->NewLongArray(2);
@@ -271,21 +289,8 @@ jlong native_pattern_scan(JNIEnv *env, jclass, jlong base_j, jlong size_j, jstri
         uintptr_t scan_start = std::max(base, m.start);
         uintptr_t scan_limit = std::min(limit, m.end);
         if (scan_limit <= scan_start) continue;
-        std::size_t capped = static_cast<std::size_t>(scan_limit - scan_start);
-        if (capped < p.bytes.size()) continue;
-
-        const uint8_t *data = reinterpret_cast<const uint8_t *>(scan_start);
-        std::size_t scan_end = capped - p.bytes.size();
-        for (std::size_t i = 0; i <= scan_end; ++i) {
-            bool ok = true;
-            for (std::size_t j = 0; j < p.bytes.size(); ++j) {
-                if (p.mask[j] && data[i + j] != p.bytes[j]) {
-                    ok = false;
-                    break;
-                }
-            }
-            if (ok) return static_cast<jlong>(scan_start + i);
-        }
+        const uintptr_t match = scan_pattern(scan_start, scan_limit, p);
+        if (match != 0) return static_cast<jlong>(match);
     }
     return 0;
 }
@@ -560,7 +565,8 @@ uintptr_t resolve_export(uintptr_t module_base, const char *symbol_name) {
 std::vector<uintptr_t> find_adrp_add_xrefs(uintptr_t text_start, uintptr_t text_end,
                                             uintptr_t target_va, std::size_t max_results) {
     std::vector<uintptr_t> results;
-    if (text_start == 0 || text_end <= text_start) return results;
+    if (text_start == 0 || text_end <= text_start || text_start % alignof(uint32_t) != 0
+            || text_end - text_start < sizeof(uint32_t)) return results;
 
     uintptr_t target_page = target_va & ~0xFFFULL;
     uint32_t target_offset = target_va & 0xFFF;
@@ -568,7 +574,7 @@ std::vector<uintptr_t> find_adrp_add_xrefs(uintptr_t text_start, uintptr_t text_
     uintptr_t scan = text_start;
     uintptr_t limit = text_end - 4;
 
-    while (scan < limit && results.size() < max_results) {
+    while (scan <= limit && results.size() < max_results) {
         uint32_t insn = *reinterpret_cast<const uint32_t *>(scan);
         if (!is_adrp(insn)) {
             scan += 4;
@@ -582,30 +588,25 @@ std::vector<uintptr_t> find_adrp_add_xrefs(uintptr_t text_start, uintptr_t text_
 
         // Optimized AArch64 often separates ADRP from the consuming ADD/LDR by register moves,
         // guards, or argument setup. Accept a short forward window instead of only ADRP+next.
-        bool matched = false;
         constexpr int kForwardInsnWindow = 8;
-        for (int i = 1; i <= kForwardInsnWindow && scan + 4 * i < text_end; ++i) {
+        for (int i = 1; i <= kForwardInsnWindow && static_cast<uintptr_t>(4 * i) <= limit - scan; ++i) {
             uint32_t candidate = *reinterpret_cast<const uint32_t *>(scan + 4 * i);
             if (completes_page_ref(candidate, adrp, target_offset)) {
                 results.push_back(scan);
-                matched = true;
                 break;
             }
         }
-        if (matched) {
-            scan += 8;
-            continue;
-        }
-
+        // A second ADRP can sit between this ADRP and its consuming ADD/LDR.
         scan += 4;
     }
     return results;
 }
 
 uintptr_t find_function_start(uintptr_t addr_in_func, std::size_t scan_back_limit) {
+    if (addr_in_func % alignof(uint32_t) != 0) return addr_in_func;
     uintptr_t scan = addr_in_func;
     uintptr_t limit = addr_in_func > scan_back_limit ? addr_in_func - scan_back_limit : 0;
-    while (scan > limit) {
+    while (scan - limit >= sizeof(uint32_t)) {
         scan -= 4;
         uint32_t insn = *reinterpret_cast<const uint32_t *>(scan);
         if (is_function_prologue(insn)) return scan;
@@ -639,35 +640,9 @@ uintptr_t find_ptr_in_range(uintptr_t start, uintptr_t end, uintptr_t value) {
 
 uintptr_t pattern_scan(uintptr_t start, uintptr_t end, const char *aob) {
     if (start == 0 || end <= start || aob == nullptr) return 0;
-    std::vector<uint8_t> bytes;
-    std::vector<bool> mask;
-    auto hex = [](char c) -> int {
-        if (c >= '0' && c <= '9') return c - '0';
-        c = static_cast<char>(c | 0x20);
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        return -1;
-    };
-    for (const char *p = aob; *p;) {
-        if (*p == ' ' || *p == '\t') { ++p; continue; }
-        if (*p == '?') { bytes.push_back(0); mask.push_back(false); ++p; if (*p == '?') ++p; continue; }
-        int hi = hex(p[0]);
-        int lo = p[1] ? hex(p[1]) : -1;
-        if (hi < 0 || lo < 0) return 0;  // malformed pattern
-        bytes.push_back(static_cast<uint8_t>((hi << 4) | lo));
-        mask.push_back(true);
-        p += 2;
-    }
-    std::size_t n = bytes.size();
-    if (n == 0 || end - start < n) return 0;
-    for (uintptr_t a = start; a + n <= end; ++a) {
-        const uint8_t *d = reinterpret_cast<const uint8_t *>(a);
-        bool ok = true;
-        for (std::size_t i = 0; i < n; ++i) {
-            if (mask[i] && d[i] != bytes[i]) { ok = false; break; }
-        }
-        if (ok) return a;
-    }
-    return 0;
+    Pattern pattern;
+    if (!parse_pattern(aob, pattern)) return 0;
+    return scan_pattern(start, end, pattern);
 }
 
 bool register_natives(JNIEnv *env) {

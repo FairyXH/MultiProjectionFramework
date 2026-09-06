@@ -19,7 +19,7 @@
             </intent-filter>
         </activity>
 
-        <!-- Modern module discovery lives entirely under META-INF/xposed/. Vector and LSPatch 1.0
+        <!-- Modern module discovery lives entirely under META-INF/xposed/. Vector and LSPatch 1.2
              both load the API-102 entry from java_init.list, so no classic manifest markers or
              assets/xposed_init entry are needed. -->
     </application>

@@ -7,20 +7,25 @@ This template uses ByteDance `android-inline-hook` / ShadowHook through Maven Pr
 - Link target: `shadowhook::shadowhook`
 
 > **Build requirement (important):** ShadowHook **2.0.1** ships an AAR whose metadata requires
-> **`compileSdk ≥ 37`**, which in turn needs **AGP 9.x** (this template pins `agp = 9.3.1`,
-> `compileSdk = 37`, Gradle `9.7.0`). If you downgrade ShadowHook to 2.0.0 you can drop back to
+> **`compileSdk ≥ 37`**, which in turn needs **AGP 9.x** (this template pins `agp = 9.4.0`,
+> `compileSdk = 37`, Gradle `9.7.1`). If you downgrade ShadowHook to 2.0.0 you can drop back to
 > AGP 8.7 / compileSdk 35. Mismatching these is the usual "template won't even build" cause.
 
-## Byte-patch first, hook second (read this before reaching for ShadowHook)
+Stable version **2.0.1** was rechecked on **2026-09-06** against both
+[upstream releases](https://github.com/bytedance/android-inline-hook/releases/tag/v2.0.1) and
+[Maven Central](https://repo.maven.apache.org/maven2/com/bytedance/android/shadowhook/maven-metadata.xml).
+There is no newer stable artifact to upgrade to. Keep 2.0.1: it includes fixes for concurrent
+`dlclose`/hook installation, shared-mode stack handling, and arm64 memory corruption, plus faster
+symbol lookup and concurrent hook installation at different addresses. LSPatch carries its own
+framework runtime; its version is independent of the module's ShadowHook dependency.
 
-For native/C++ game targets, **most cheats are a guarded byte-patch, not a hook** — "force this
-bool true", "return this constant", "skip this check". Those are done with the patch engine +
-auto-resolving `CodeFeature`s in `template_native.cpp` (no trampoline and directly revertible, but
-still observable through code-integrity checks). Reach for ShadowHook only when you must
-**intercept** — read/modify arguments or the
-return value, run your own logic, or trace during RE. Full workflow: `NATIVE_MODDING_PLAYBOOK.md`.
-For managed engines, prefer the engine API first (`ENGINE_IL2CPP.md`, `ENGINE_GODOT_LUA_COCOS.md`)
-and hook the resolved native code pointer with `shadowhook_hook_func_addr`.
+## Hook and patch responsibilities
+
+The default native path initializes ShadowHook without installing a demonstration hook. The
+optional `CodeFeature` array is empty. Adding native features requires validated addresses and a settings bridge; Java
+registry toggles do not automatically apply/revert those native entries. The native-install toggle
+gates initial setup and does not unhook an installed library. See the
+[native workflow](NATIVE_MODDING_PLAYBOOK.md) for the scaffold's bounds and two-word patch limitations.
 
 ## Why ShadowHook here
 
@@ -41,8 +46,11 @@ ShadowHook supports:
 - `arm64-v8a`
 - `armeabi-v7a`
 
-ShadowHook 2.0.1 declares Android 4.1 through Android 17 support. This template intentionally keeps
-`minSdk=26`, which is a project policy rather than a ShadowHook limitation.
+ShadowHook 2.0.1 declares Android 4.1 through Android 17 support. This template uses
+`minSdk=28` (Android 9), matching Vector/LSPatch. The AAR's `compileSdk` requirement concerns
+the host build and does not require Android 17 on the device. Keep the NDK r29 default
+ELF alignment (16 KiB on arm64) and uncompressed native-library packaging for newer Android devices;
+this also works on Android 9 devices with 4 KiB pages.
 
 It does **not** support:
 
@@ -50,21 +58,20 @@ It does **not** support:
 - `x86_64`
 - Houdini-translated ARM code on x86 Android
 
-For an Android Studio emulator on an Intel Mac, native hooks with ShadowHook are usually not available because those AVDs are typically x86_64. Use Java hooks only there, or use an arm64 device. On Apple Silicon, choose an arm64 emulator image if available.
+The template packages ARM/ARM64 libraries. Turning off `ENABLE_NATIVE_SHADOWHOOK` does not produce
+an x86 APK; a Java-only fork must remove the native build/dependency and ABI filters as well.
+Use a matching ARM device or emulator for the template's native scaffold.
 
-## Native smoke test in this template
+## Native scaffold in this template
 
-`app/src/main/cpp/template_native.cpp` installs a safe smoke-test hook:
+`app/src/main/cpp/template_native.cpp` initializes the hook engine and exposes the JNI helpers.
+`TARGET_LIB` is empty and `g_features` contains no entries, so initialization does not patch any
+app code. There is no `getpid` smoke hook, callback or hit counter. Tests live under repository-root
+`tests/` and run on the host; their code and ASan instrumentation are not linked into this library.
 
-- target: `libc.so!getpid`
-- behavior: increments an in-memory counter and calls the original function unchanged
-- purpose: verify ShadowHook loading, symbol resolution, and call-chain behavior
-
-Note it hooks by **`library + symbol name`** — that only works for **exported** symbols (libc).
-A stripped game's own functions have no symbols, so a real hook targets a **resolved address**
-(`shadowhook_hook_func_addr` on `base + rva` from the resolvers) — you don't need Frida for that:
-the `tools/` static analyzers + `memtool` ("Frida without Frida") find the address, and the
-`CodeFeature` resolvers re-derive it at runtime. Replace the smoke test with your real target.
+Use `library + symbol` for an available symbol or `shadowhook_hook_func_addr` for a validated runtime
+address when adding real target behavior. Keep the ABI and lifecycle requirements in
+[NATIVE_MODDING_PLAYBOOK.md](NATIVE_MODDING_PLAYBOOK.md).
 
 ## Hook modes
 
@@ -89,7 +96,7 @@ Shared mode proxy functions must use `SHADOWHOOK_STACK_SCOPE()` or `SHADOWHOOK_P
 - Do not install native hooks from `Application.attach` synchronously when the target library
   loads later in process startup. Use a short worker thread, a linker callback, or ShadowHook
   pending hooks and log the final install result.
-- Gate every non-smoke-test hook behind a runtime feature flag. A module-level disable belongs
+- Gate every app-specific hook behind a runtime feature flag. A module-level disable belongs
   in LSPosed/Vector; in-app switches should enable or disable individual behaviors.
 - Avoid hooking extremely hot libc/pthread functions in production unless required and thoroughly profiled.
 - Disable verbose ShadowHook logs in release builds.

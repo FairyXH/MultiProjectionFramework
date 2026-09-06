@@ -435,8 +435,10 @@ public final class OverlayController {
                     movedView.setLayoutParams(lp);
                     return true;
                 case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
                     if (clickOnTap && !moved[0]) movedView.performClick();
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    // Cancellation (e.g. intercepted touch) is not a completed tap.
                     return true;
                 default:
                     return true;

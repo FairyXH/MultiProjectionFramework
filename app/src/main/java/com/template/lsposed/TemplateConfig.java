@@ -50,9 +50,6 @@ public final class TemplateConfig {
     /** Loads app/src/main/cpp and initializes ByteDance ShadowHook. Requires arm/arm64 process. */
     public static final boolean ENABLE_NATIVE_SHADOWHOOK = true;
 
-    /** Logs Activity.onResume events as a simple Java-hook smoke test. */
-    public static final boolean ENABLE_SAMPLE_ACTIVITY_LOG_HOOK = true;
-
     /** Pulled from BuildConfig so release builds strip verbose logs automatically. */
     public static final boolean VERBOSE_LOGS = BuildConfig.VERBOSE_LOGS;
 

@@ -3,10 +3,11 @@ package com.template.lsposed;
 /**
  * Java-side facade for the native helper toolkit implemented in {@code native_utils.cpp}.
  *
- * <p>All methods here return benign fallbacks (0 or -1, empty arrays) instead of throwing, so
- * they are safe to call from hot code paths. The native library is lazy-loaded via
- * {@link NativeBridge#loadTemplateNative()} which in turn registers these natives through
- * {@code JNI_OnLoad}. If the library fails to load, every call returns its fallback.</p>
+ * <p>Java/JNI lookup failures return method-specific fallbacks (0, null, false, or empty arrays).
+ * Java catch blocks do not catch native signals. Mapping checks are snapshots: callers must keep
+ * the library/address range alive while native code uses it. Loading a library, reading maps and
+ * scanning memory can block, so cache resolved addresses and avoid these operations in hot hooks.
+ * The native library is loaded through {@link NativeBridge#loadTemplateNative()}.</p>
  */
 public final class NativeUtils {
     private NativeUtils() {}
@@ -65,8 +66,10 @@ public final class NativeUtils {
     }
 
     /**
-     * Writes {@code data} to {@code address}, flipping the page to RW+X-safe via {@code mprotect}.
-     * Returns {@code true} only when the full write succeeded.
+     * Writes within one mapped range, temporarily adding read/write permissions while preserving
+     * the original execute bit. Restores the original permissions and flushes the instruction
+     * cache for executable memory. Returns false on failure; a failed permission restore can occur
+     * after bytes were written, so false does not imply that memory is unchanged.
      */
     public static boolean writeMemory(long address, byte[] data) {
         if (address == 0 || data == null || data.length == 0 || data.length > (8 * 1024 * 1024)) {

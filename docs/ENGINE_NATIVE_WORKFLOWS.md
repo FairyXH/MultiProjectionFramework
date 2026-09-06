@@ -1,7 +1,7 @@
 # Engine-native workflow notes
 
-This template is engine-neutral. The default module ships one Java smoke hook, one native
-ShadowHook smoke hook, an engine detector, and a generic feature overlay. Keep app-specific
+This template is engine-neutral. It supplies an initialization hook, optional native utilities,
+an engine detector, and a generic feature overlay. It installs no demonstration hooks. Keep app-specific
 offsets, generated metadata, and target names on a feature branch.
 
 Use this document when an authorized target has a native-heavy runtime such as Unity IL2CPP,
@@ -90,7 +90,7 @@ Prefer these patch strategies in order:
 
 ## Documentation expected on app branches
 
-For each non-smoke hook, branch docs should record:
+For each app-specific hook, branch docs should record:
 
 - managed method, RVA, and ABI
 - backing field offsets, if used

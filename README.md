@@ -7,7 +7,7 @@ A quick-start Android/Vector module template for authorized testing and rapid pr
 What it includes:
 
 - Modern `libxposed` API 102 entry point (`io.github.libxposed:api:102.0.0`, `compileOnly`).
-- One module APK for both rooted Vector and rootless LSPatch 1.0. LSPatch 1.0 is rebuilt on Vector
+- One module APK for both rooted Vector and rootless LSPatch 1.2. LSPatch 1.x is rebuilt on Vector
   and loads modern libxposed API-102 modules through `META-INF/xposed/java_init.list`; the obsolete
   API-93-only `lspatch` flavor is no longer needed. See [`docs/LSPATCH_NONROOT.md`](docs/LSPATCH_NONROOT.md).
 - Both `onPackageLoaded` and `onPackageReady` callbacks are overridden for broad compatibility.
@@ -18,17 +18,16 @@ What it includes:
   - `java_init.list`
   - `scope.list`
   - `module.prop` with the correct `exceptionMode=protective` key
-- A safe Java hook smoke test using the API 102 interceptor-chain style.
-- `FeatureRegistry` — runtime feature flags (bool/float) with best-effort persistence and
-  live-updating overlay toggles bound to each feature key. OPSEC caveat: persistence writes a
-  plaintext toggle file into the **target app's own sandbox** (`getFilesDir()`); a readable file
-  naming your features/toggles inside the target is a detection surface, so prefer in-memory-only
-  state for stealth (drop the `save()`/`load()` calls or point `FEATURE_STATE_FILE_NAME` at a path
-  outside the target).
+- An Application.attach hook for initialization; add app-specific behavior using the API-102 interceptor chain.
+- `FeatureRegistry` — bool/float settings and overlay toggles. State is stored in
+  `TemplateConfig.FEATURE_STATE_FILE_NAME` under the target app's `getFilesDir()`.
+  Writes are synchronous and best-effort; keep changes out of high-frequency hook callbacks.
+  This is target-process storage, not a companion-app settings bridge.
 - `EngineDetector` — identifies Unity / Unreal / Cocos2d-x / Godot / Flutter /
   React-Native / Xamarin targets at startup so you can branch hook strategies.
 - `NativeUtils` — JNI helpers for `/proc/self/maps` module lookup, IDA-style pattern
-  scan, `dlsym` resolution, and safe `mprotect`-guarded read/write-memory primitives.
+  scan, `dlsym` resolution, and memory read/write helpers with mapping checks. Java exception
+  handling does not catch native faults or prevent a concurrent unmap; see the API comments.
 - A movable dark/lavender Nyx-styled floating menu:
   - movable oval bubble
   - movable rectangular panel when opened (drag the header)
@@ -41,7 +40,7 @@ What it includes:
   framework/JNI must find by name — the entry class (`ModuleEntry`), `NativeBridge`, and
   `NativeUtils` (their method names are bound as strings in `JNI_OnLoad`), and
   the `FeatureRegistry.KEY_*` constants — so those names are **not** obfuscated and stay visible to
-  an app enumerating its classloader. Everything not kept is renamed/obfuscated by R8.
+  an app enumerating its classloader. R8 can rename or remove other code according to reachability and its rules.
 - Neutral log tag (`AppRuntime`) and worker thread name; release builds disable verbose Java and
   native logging by default.
 - The documented LSPatch/SAI workflow deliberately signs both the module and every patched target
@@ -58,17 +57,26 @@ Use this only on apps/systems you own or are authorized to test.
 
 ## Current researched versions
 
-- Verified against upstream releases on **2026-08-19**.
-- `libxposed` API: `102.0.0`; Vector 2.2 and LSPatch 1.0 implement modern API level 102.
-- LSPatch: stable `v1.0` build 455 (released 2026-08-18). The newest prerelease checked was
-  `canary-460` (2026-08-19); use stable unless you are validating a specific canary fix.
-- ByteDance Android inline hook library (`shadowhook`): `2.0.1`.
-- Android Gradle Plugin `9.3.1`, Gradle `9.7.0`, compile/target SDK 37,
+- Verified against upstream releases on **2026-09-06**. The supported device floor is
+  **Android 9 (API 28)** (`minSdk=28`); compile/target SDK 37 does not raise that minimum.
+- `libxposed` API: [`102.0.0`](https://github.com/libxposed/api/releases/tag/102.0.0), still the
+  latest stable API. Rooted [Vector 2.2](https://github.com/JingMatrix/Vector/releases/tag/v2.2)
+  and rootless LSPatch 1.2 implement API 102.
+- LSPatch: stable [`v1.2`, build 487](https://github.com/JingMatrix/LSPatch/releases/tag/v1.2)
+  (2026-08-23). `./tools/download-lspatch.sh` downloads and verifies the pinned CLI JAR into
+  `artifacts/lspatch/`. Re-patch existing targets to upgrade their embedded runtime, including
+  targets patched with 1.0 or 1.1. See [`docs/LSPATCH_NONROOT.md`](docs/LSPATCH_NONROOT.md).
+- ByteDance ShadowHook: [`2.0.1`](https://github.com/bytedance/android-inline-hook/releases/tag/v2.0.1),
+  still the latest stable release. It supports `armeabi-v7a` and `arm64-v8a`, including Android 9;
+  it does not support `x86`/`x86_64` or Houdini-translated environments.
+- Build tools: [Android Gradle Plugin `9.4.0`](https://developer.android.com/build/releases/agp-9-4-0-release-notes),
+  [Gradle `9.7.1`](https://docs.gradle.org/9.7.1/release-notes.html), compile/target SDK 37,
   Android NDK `29.0.14206865`, CMake `4.1.2`, and AndroidX Annotation `1.10.0`.
-- The resolved Kotlin stdlib remains `2.2.10`, supplied by AGP's built-in Kotlin toolchain and
-  ShadowHook. Do not override only the stdlib to 2.4.x; update the compiler/runtime together when
-  a later AGP toolchain adopts it.
-- ShadowHook supports `armeabi-v7a` and `arm64-v8a`; it does **not** support `x86`/`x86_64` or Houdini-translated environments.
+  NDK r29 remains [the latest stable NDK](https://developer.android.com/ndk/downloads); r30 is a preview.
+- Use JDK 21 for the host build and patcher (also used in CI). The resolved Kotlin stdlib remains
+  `2.2.10`, managed by AGP's built-in toolchain and ShadowHook; do not override just the stdlib
+  independently of the compiler. No separate Kotlin plugin or runtime pin is needed for this
+  Java template.
 
 ## Quick start
 
@@ -98,14 +106,20 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 Enable the module in Vector, select the target scope, then force-stop and reopen the target app:
 
 ```bash
+adb logcat -c
 adb shell am force-stop com.example.target
 adb shell monkey -p com.example.target 1
-adb logcat -c
 adb logcat -s AppRuntime shadowhook_tag
 ```
 
-Release builds silence these logs by default (`BuildConfig.VERBOSE_LOGS=false`).
-Use `./gradlew :app:installDebug` while developing to get the chatty tag.
+Release builds disable verbose logs (`BuildConfig.VERBOSE_LOGS=false`); native warnings/errors
+can still appear. Use `./gradlew :app:installDebug` for diagnostic logs. Clear logcat before
+launching so startup messages are retained.
+
+The configure tool validates options and source destinations before writing. It escapes display
+names for Java and Android XML, uses a package-based Gradle identifier, and detects the current
+namespace/native name on later runs. It leaves tools and generated artifacts untouched. Details and host regression checks are in
+[`tools/README.md`](tools/README.md) and [`tests/README.md`](tests/README.md).
 
 ## Files you normally edit first
 
@@ -113,6 +127,15 @@ Use `./gradlew :app:installDebug` while developing to get the chatty tag.
 - `app/src/main/resources/META-INF/xposed/scope.list`
 - `app/src/main/resources/META-INF/xposed/module.prop`
 - `app/src/main/res/values/strings.xml`
+
+## Test isolation and runtime work
+
+Regression tests live in the repository-root `tests/` directory and run on the host or in CI.
+They are outside the Android source sets and CMake library inputs: test runners, Java test doubles,
+fixtures and ASan binaries are not packaged in the module. The module installs no Activity.onResume
+or libc getpid smoke-test hooks and keeps no per-invocation demo counters. Its Application.attach
+hook remains responsible for actual module initialization. Bounds and input checks that prevent
+invalid memory access or corrupt settings remain in place.
 
 ## Modern libxposed API shape
 
@@ -155,7 +178,7 @@ ShadowHook is the recommended native inline-hook scaffold in this template becau
 - linker init/fini callbacks
 - operation records for debugging
 
-The template’s native code installs a harmless `libc.so!getpid` smoke-test hook and returns the original value unchanged. Replace that with your app-specific native hook only after finding stable symbols/addresses with Frida.
+The native scaffold initializes ShadowHook and installs no demonstration hooks. Add native hooks only for your configured target, using validated symbols or addresses.
 
 See `docs/SHADOWHOOK_NOTES.md`.
 
@@ -172,7 +195,7 @@ for a branch that targets one app, not as default template behavior.
 
 ## Non-root delivery (LSPatch)
 
-LSPatch 1.0 uses Vector's runtime and accepts this template's modern API-102 module directly. Build
+LSPatch 1.2 uses Vector's runtime and accepts this template's modern API-102 module directly. Build
 the same release APK used by rooted Vector. For this template, the non-root workflow is always:
 
 1. embed the module with `-m` (never use manager mode);
@@ -221,7 +244,7 @@ If you use an x86/x86_64 emulator, Java libxposed hooks can still work, but the 
 - `SECURITY.md` — safe issue-reporting expectations.
 - `CONTRIBUTING.md` — contribution and validation expectations.
 - `docs/ENGINE_NATIVE_WORKFLOWS.md` — optional notes for Unity IL2CPP and native-heavy targets.
-- `docs/LSPATCH_NONROOT.md` — non-root delivery via LSPatch 1.0 (modes, splits, signing, CLI).
+- `docs/LSPATCH_NONROOT.md` — non-root delivery via LSPatch 1.2 (modes, splits, signing, CLI).
 - `.github/workflows/android.yml` — GitHub Actions build for debug and release APKs.
 
 ## License
