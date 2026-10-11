@@ -56,13 +56,23 @@ export GRADLE_USER_HOME=/opt/gradle-home
 4. 调起任意 App 录屏 → 观察 startProjectionLocked/stopProjectionLocked/setContentRecordingSession 日志
 5. 阶段 6：SystemUI 范围选择 Hook（createOptionList 解除禁用）
 
-## 阶段 5 部署状态（2026-10-11 20:45 更新）
-- ✅ **完整链路已打通**（20:34 重启验证）：`Loaded → onSystemServerStarting → installForSystemServer → diag thread started`，日志可观测性方案有效
-- ❌ **新根因**：`class not found: com.android.server.media.projection.MediaProjectionManagerService`（6 次重试全失败）——`Class.forName` 用模块默认 classloader，找不到 system_server 内部类（services.jar 中的类需 boot/system classloader）
-- 🔧 **已修复**（commit bce354a）：`onSystemServerStarting(param.getClassLoader())` → Bootstrap → Diagnostics；`findServerClass()` 优先用 system classloader 加载，失败记录详情
-- 📦 新 APK 已构建+安装成功（20:38）；LSPosed 启用保留
-- ⏳ **待重启验证** → 应出现 `found class MediaProjectionManagerService, installing hooks` + `server diagnostics installed`；若仍失败会有 `load via system classloader failed: ...` 异常详情
-- 验证命令：`grep -a 'multiprojection' /data/adb/lspd/log/modules_*.log | tail -25`
+## 阶段 5 部署状态（2026-10-11 21:06 更新）✅ **阶段 5 完成**
+- ✅ system_server 注入 → `onSystemServerStarting` → `Diagnostics.installForSystemServer` → **7 个 Hook 全部安装成功**
+- ✅ 实测录屏（21:04，com.oplus.screenrecorder）：`createProjectionInternal enter uid=10124 pkg=com.oplus.screenrecorder type=0 svc=MediaProjectionManagerService`
+- ✅ `handleForegroundServicesChanged` 持续捕获（pid/uid 正常）
+- 🔬 **关键教训（勿重踩）**：
+  1. system_server 中 `android.util.Log` **不可观测** → 必须用 `XposedInterface.log()`（走 LSPosed log daemon）
+  2. `Class.forName` 默认 classloader 找不到 services.jar 内部类 → 必须用 `SystemServerStartingParam.getClassLoader()`
+  3. `onPackageLoaded` 在 system_server **不触发**，正确入口是 `onSystemServerStarting`
+- 📌 日志查看命令：`grep -a 'multiprojection' /data/adb/lspd/log/modules_*.log | tail -25`
+- 当前模块在 system + com.android.systemui + android 作用域，LSPosed 启用
+
+## 阶段 6（SystemUI 范围选择 Hook）— 规划中
+- Hook 点：`MediaProjectionPermissionDialogDelegate.Companion.createOptionList(Context, String, MediaProjectionConfig, boolean)`
+- 目标：请求方 `CAPTURE_REGION_FIXED_DISPLAY` 也开放"单个应用"选项
+- 独立性开关：`FeatureRegistry.KEY_RANGE_CHOICE`（`range_choice`），默认关
+- 详细方案见 `docs/DESIGN_IMPLEMENTATION.md` 路径一
+- ⚠️ 此阶段需在 SystemUI 进程生效（作用域已有 com.android.systemui）；SystemUI 有 `Application.attach`，可用普通 Bootstrap 流程
 
 ## 风险提醒
 - 阶段 5/7 启用 system 作用域前必须获用户批准 + 说明 bootloop 风险。
