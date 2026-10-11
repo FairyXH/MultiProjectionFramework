@@ -67,12 +67,19 @@ export GRADLE_USER_HOME=/opt/gradle-home
 - 📌 日志查看命令：`grep -a 'multiprojection' /data/adb/lspd/log/modules_*.log | tail -25`
 - 当前模块在 system + com.android.systemui + android 作用域，LSPosed 启用
 
-## 阶段 6（SystemUI 范围选择 Hook）— 规划中
-- Hook 点：`MediaProjectionPermissionDialogDelegate.Companion.createOptionList(Context, String, MediaProjectionConfig, boolean)`
-- 目标：请求方 `CAPTURE_REGION_FIXED_DISPLAY` 也开放"单个应用"选项
-- 独立性开关：`FeatureRegistry.KEY_RANGE_CHOICE`（`range_choice`），默认关
-- 详细方案见 `docs/DESIGN_IMPLEMENTATION.md` 路径一
-- ⚠️ 此阶段需在 SystemUI 进程生效（作用域已有 com.android.systemui）；SystemUI 有 `Application.attach`，可用普通 Bootstrap 流程
+## 阶段 6（SystemUI 范围选择 Hook）— 编码中
+- Hook 点：`MediaProjectionPermissionDialogDelegate$Companion.createOptionList(Context, String, MediaProjectionConfig, boolean)` ✅ 已反编译确认
+- 实现文件：`app/src/main/java/com/fairyxh/multiprojection/RangeChoiceHook.java`（新建）
+- 策略：保持列表顺序/默认选中不变（FIXED_DISPLAY 时整屏在前为默认），仅把 `mode==0`（单应用）的 `spinnerDisabledText` 清为 null → 解除禁用，用户可切"单个应用"
+- 接入：`Bootstrap.start()` 中 `KEY_RANGE_CHOICE` && `isSystemUiPackage` 时调用 `RangeChoiceHook.install`
+- 独立性开关：`TemplateConfig.RANGE_CHOICE_ENHANCED`（默认 false）+ `FeatureRegistry.KEY_RANGE_CHOICE`
+- ⚠️ **图标黑名单注意**：pubgmhd/sgame 黑名单强制整屏逻辑在 `getMediaProjectionConfig()`（早于此 Hook），本 Hook 无法按包名区分 → 对黑名单也会放开单应用。如需对黑名单保持强制，需额外按包名负责（待批准）
+- ⚠️ 验证方式：需开启 `range_choice` 开关 + 重启 SystemUI 进程；由 `MediaProjectionPermissionActivity` FIXED_DISPLAY 请求方触发
+
+## 阶段 6 部署状态（2026-10-11 21:15 更新）
+- 🔧 代码已编写（RangeChoiceHook.java + Bootstrap 接入 + TemplateConfig.isSystemUiPackage）
+- ⏳ 待构建成功 + 启用 range_choice 开关 + 验证
+- 验证命令：`grep -a 'RangeChoice' /data/adb/lspd/log/modules_*.log | tail`
 
 ## 风险提醒
 - 阶段 5/7 启用 system 作用域前必须获用户批准 + 说明 bootloop 风险。

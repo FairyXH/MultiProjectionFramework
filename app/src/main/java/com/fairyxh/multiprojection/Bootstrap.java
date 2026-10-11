@@ -35,6 +35,12 @@ public final class Bootstrap {
             Diagnostics.install(api, app);
         }
 
+        // 阶段 6：范围选择增强（仅在 SystemUI 进程生效）。
+        if (FeatureRegistry.getBool(FeatureRegistry.KEY_RANGE_CHOICE)
+                && TemplateConfig.isSystemUiPackage(app.getPackageName())) {
+            RangeChoiceHook.install(api, app);
+        }
+
         // 多会话/范围选择等业务 Hook 由各 Hook 类在需要时读取 FeatureRegistry。
         if (TemplateConfig.ENABLE_OVERLAY) {
             attachOverlay(app);

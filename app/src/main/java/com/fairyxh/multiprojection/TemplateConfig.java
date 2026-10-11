@@ -82,6 +82,11 @@ public final class TemplateConfig {
         return false;
     }
 
+    /** 是否为 SystemUI 进程（阶段 6 范围选择 Hook 的应用条件）。 */
+    public static boolean isSystemUiPackage(String packageName) {
+        return "com.android.systemui".equals(packageName);
+    }
+
     /**
      * Process-level filter applied after {@link #shouldHook(String)}. The {@code processName}
      * argument is the value returned by {@code ModuleLoadedParam.getProcessName()}.
