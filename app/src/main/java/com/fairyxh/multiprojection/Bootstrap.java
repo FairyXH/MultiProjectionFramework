@@ -7,11 +7,13 @@ import android.util.Log;
 
 import com.fairyxh.multiprojection.ui.OverlayController;
 
+import io.github.libxposed.api.XposedInterface;
+
 /**
  * Framework-neutral initialization called by the API-102 {@link ModuleEntry} once per process.
  *
  * <p>纯 Java 版本：不做引擎探测、不加载任何 native 库。system_server 进程没有 Activity 环境，
- * 悬浮菜单只在 SystemUI 进程附加。</p>
+ * 悬浮菜单只在 SystemUI 进程附加。阶段 5 的只读诊断 Hook 由 {@link Diagnostics} 安装。</p>
  */
 public final class Bootstrap {
     private static volatile boolean started;
@@ -19,13 +21,18 @@ public final class Bootstrap {
 
     private Bootstrap() {}
 
-    public static synchronized void start(Context context) {
+    public static synchronized void start(Context context, XposedInterface api) {
         if (started || context == null) return;
         started = true;
         final Context app = context.getApplicationContext() != null
                 ? context.getApplicationContext() : context;
 
         FeatureRegistry.initialize(app);
+
+        // 阶段 5：只读诊断（仅在 system_server 生效；PROTECTIVE，不改变系统行为）。
+        if (FeatureRegistry.getBool(FeatureRegistry.KEY_DIAGNOSTICS)) {
+            Diagnostics.install(api, app);
+        }
 
         // 多会话/范围选择等业务 Hook 由各 Hook 类在需要时读取 FeatureRegistry。
         if (TemplateConfig.ENABLE_OVERLAY) {

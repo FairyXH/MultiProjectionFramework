@@ -103,8 +103,8 @@ public final class ModuleEntry extends XposedModule {
         if (applicationContextReady) return;
         applicationContextReady = true;
         Context appContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
-        // Idempotent via Bootstrap's static guard.
-        Bootstrap.start(appContext);
+        // Idempotent via Bootstrap's static guard. ModuleEntry (XposedModule) 本身即 api。
+        Bootstrap.start(appContext, this);
     }
 
 }
