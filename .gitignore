@@ -17,3 +17,10 @@ artifacts/
 .env
 __pycache__/
 *.py[cod]
+
+# MultiProjection Framework: 运行时日志与提取/反编译产物不入库
+logs/
+extracted/
+jadx/
+builds/
+*.log

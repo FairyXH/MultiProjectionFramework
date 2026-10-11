@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">LSPosed Universal Template</string>
-    <string name="xposed_description">Modern libxposed API 102 template for rooted Vector and rootless LSPatch 1.2, with a movable Nyx-styled overlay and optional ShadowHook native scaffold.</string>
-    <string name="launcher_instructions">%1$s\n\n1. Edit TemplateConfig.TARGET_PACKAGES.\n2. Edit META-INF/xposed/scope.list.\n3. Build: ./gradlew :app:assembleRelease\n4. For Vector, install and enable app-release.apk.\n   For LSPatch 1.2, embed the same APK while patching the target.\n\nCurrent first target: %2$s\n\nThe in-app Nyx bubble appears inside the target Activity after Application.attach. Tap it to open the rectangular panel; drag the panel header to move it.</string>
+    <string name="app_name">MultiProjection Framework</string>
+    <string name="xposed_description">Android 15 / ColorOS 15 多路 MediaProjection 会话框架（libxposed API 102，仅 system 与 com.android.systemui 作用域）。</string>
+    <string name="launcher_instructions">%1$s\n\n作用域：android（system_server）与 com.android.systemui。\n\n1. 在 LSPosed/Vector 中启用本模块。\n2. 选择作用域：Android 系统框架 + SystemUI。\n3. 重启后生效。\n\n当前首个目标：%2$s</string>
 </resources>

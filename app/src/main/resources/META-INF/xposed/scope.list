@@ -1,1 +1,3 @@
-com.example.target
+# MultiProjection Framework 作用域：严格限定系统框架与 SystemUI，绝不注入第三方 App。
+android
+com.android.systemui

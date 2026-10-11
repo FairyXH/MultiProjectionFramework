@@ -1,4 +1,4 @@
-package com.template.lsposed;
+package com.fairyxh.multiprojection;
 
 import android.annotation.SuppressLint;
 import android.app.Application;

@@ -1,9 +1,8 @@
-package com.template.lsposed.ui;
+package com.fairyxh.multiprojection.ui;
 
 import android.app.Activity;
 import android.app.Application;
 import android.content.Context;
-import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -19,17 +18,14 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.template.lsposed.FeatureRegistry;
-import com.template.lsposed.FeatureState;
-import com.template.lsposed.NativeBridge;
-import com.template.lsposed.TemplateConfig;
+import com.fairyxh.multiprojection.FeatureRegistry;
+import com.fairyxh.multiprojection.FeatureState;
+import com.fairyxh.multiprojection.TemplateConfig;
 
 import java.util.HashMap;
-import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -231,30 +227,6 @@ public final class OverlayController {
         hairline.setBackgroundColor(Color.argb(0x55, 0xB8, 0x9A, 0xFF));
         root.addView(hairline, hp);
 
-        ColorStateList lavender = ColorStateList.valueOf(Color.argb(0xFF, 0xB8, 0x9A, 0xFF));
-        ColorStateList trackBg = ColorStateList.valueOf(Color.argb(0xFF, 0x3A, 0x35, 0x50));
-
-        final FeatureRegistry.Feature multiplier = findFloatFeature(FeatureRegistry.KEY_MULTIPLIER);
-        final float minMult = multiplier != null ? multiplier.min : 1f;
-        final float maxMult = multiplier != null ? multiplier.max : 30f;
-        final String multLabelText = multiplier != null ? multiplier.label : "Multiplier";
-
-        final TextView multLabel = new TextView(appCtx);
-        multLabel.setTextColor(Color.WHITE);
-        multLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        multLabel.setText(formatMultiplier(multLabelText, FeatureState.getMultiplier()));
-        root.addView(multLabel);
-
-        final SeekBar multBar = new SeekBar(appCtx);
-        int range = (int) Math.round((maxMult - minMult) * 10f);
-        multBar.setMax(Math.max(1, range));
-        multBar.setProgress(clamp(Math.round((FeatureState.getMultiplier() - minMult) * 10f),
-                0, multBar.getMax()));
-        multBar.setProgressTintList(lavender);
-        multBar.setProgressBackgroundTintList(trackBg);
-        multBar.setThumbTintList(lavender);
-        root.addView(multBar);
-
         for (FeatureRegistry.Feature f : FeatureRegistry.features()) {
             if (f.type == FeatureRegistry.Type.BOOL) addToggleRow(root, f);
         }
@@ -267,17 +239,6 @@ public final class OverlayController {
         root.addView(stats);
         panelStats = stats;
 
-        multBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                float value = minMult + progress / 10f;
-                FeatureState.setMultiplier(value);
-                multLabel.setText(formatMultiplier(multLabelText, FeatureState.getMultiplier()));
-                stats.setText(FeatureState.summary());
-            }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
-        });
-
         LinearLayout row = new LinearLayout(appCtx);
         row.setOrientation(LinearLayout.HORIZONTAL);
         LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
@@ -288,17 +249,8 @@ public final class OverlayController {
         Button reset = nyxButton("Reset");
         reset.setOnClickListener(v -> {
             FeatureRegistry.resetToDefaults();
-            multBar.setProgress(clamp(Math.round((FeatureState.getMultiplier() - minMult) * 10f),
-                    0, multBar.getMax()));
-            multLabel.setText(formatMultiplier(multLabelText, FeatureState.getMultiplier()));
-            Toast.makeText(appCtx, "Defaults restored", Toast.LENGTH_SHORT).show();
-        });
-
-        Button nativeRetry = nyxButton("Native");
-        nativeRetry.setOnClickListener(v -> {
-            int result = NativeBridge.installNativeHooks(appCtx, appCtx.getPackageName());
             stats.setText(FeatureState.summary());
-            Toast.makeText(appCtx, "Native install: " + result, Toast.LENGTH_SHORT).show();
+            Toast.makeText(appCtx, "Defaults restored", Toast.LENGTH_SHORT).show();
         });
 
         Button close = nyxButton("X");
@@ -307,12 +259,10 @@ public final class OverlayController {
         LinearLayout.LayoutParams flex = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         flex.setMargins(0, 0, dp(4), 0);
         reset.setLayoutParams(flex);
-        nativeRetry.setLayoutParams(new LinearLayout.LayoutParams(flex));
         LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(dp(36), LinearLayout.LayoutParams.WRAP_CONTENT);
         close.setLayoutParams(closeLp);
 
         row.addView(reset);
-        row.addView(nativeRetry);
         row.addView(close);
         root.addView(row);
 
@@ -354,17 +304,6 @@ public final class OverlayController {
 
         parent.addView(row);
         toggleRefs.put(feature.key, toggle);
-    }
-
-    private FeatureRegistry.Feature findFloatFeature(String key) {
-        for (FeatureRegistry.Feature f : FeatureRegistry.features()) {
-            if (f.type == FeatureRegistry.Type.FLOAT && key.equals(f.key)) return f;
-        }
-        return null;
-    }
-
-    private static String formatMultiplier(String label, float value) {
-        return String.format(Locale.US, "%s  \u00d7%.1f", label, value);
     }
 
     private void refreshPanel() {

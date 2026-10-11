@@ -1,4 +1,4 @@
-package com.template.lsposed;
+package com.fairyxh.multiprojection;
 
 import android.content.Context;
 import android.util.Log;
@@ -28,8 +28,9 @@ public final class FeatureRegistry {
     private static final int MAX_STATE_BYTES = 64 * 1024;
 
     public static final String KEY_ENABLED = "enabled";
-    public static final String KEY_MULTIPLIER = "multiplier";
-    public static final String KEY_NATIVE_HOOKS = "native_hooks";
+    public static final String KEY_DIAGNOSTICS = "diagnostics";
+    public static final String KEY_RANGE_CHOICE = "range_choice";
+    public static final String KEY_MULTI_SESSION = "multi_session";
 
     public enum Type { BOOL, FLOAT }
 
@@ -82,9 +83,9 @@ public final class FeatureRegistry {
         initialized = true;
 
         register(Feature.bool(KEY_ENABLED, "Module enabled", true));
-        register(Feature.bool(KEY_NATIVE_HOOKS, "Native ShadowHook scaffold",
-                TemplateConfig.ENABLE_NATIVE_SHADOWHOOK));
-        register(Feature.number(KEY_MULTIPLIER, "Multiplier", 1f, 1f, 30f));
+        register(Feature.bool(KEY_DIAGNOSTICS, "Diagnostics", TemplateConfig.DIAGNOSTICS_ENABLED));
+        register(Feature.bool(KEY_RANGE_CHOICE, "Range choice (SystemUI)", TemplateConfig.RANGE_CHOICE_ENHANCED));
+        register(Feature.bool(KEY_MULTI_SESSION, "Multi-session (system)", TemplateConfig.MULTI_SESSION_ENABLED));
 
         if (ctx != null) {
             try {

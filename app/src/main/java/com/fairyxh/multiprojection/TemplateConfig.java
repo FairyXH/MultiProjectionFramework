@@ -1,35 +1,34 @@
-package com.template.lsposed;
+package com.fairyxh.multiprojection;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
 /**
- * Change these constants first when creating a new module.
+ * 模块全局配置（纯 Java 版）。
  *
- * <p>The helper script in {@code tools/configure-template.py} rewrites the package name,
- * app name, module metadata, and static scope files for you.</p>
+ * <p>作用域严格限定为系统框架（{@code android} 包，system_server 进程）与
+ * {@code com.android.systemui}；绝不注入任何第三方 App 进程。</p>
  */
 public final class TemplateConfig {
     private TemplateConfig() {}
 
-    /** Packages where the module is allowed to run. Keep this tight for stability. */
+    /**
+     * LSPosed 作用域：仅系统框架（android / system_server）与 SystemUI。
+     * 第三方 App 一律不注入。
+     */
     public static final String[] TARGET_PACKAGES = {
-            "com.example.target"
+            "android",
+            "com.android.systemui"
     };
 
     /**
-     * Optional allow-list of process suffixes to hook. Empty string = the main process
-     * (bare package name). Example: {@code {"", ":game"}} hooks both {@code com.example.target}
-     * and {@code com.example.target:game}. Use {@code {"*"}} to hook every process.
+     * 进程后缀白名单：system_server 主进程为 "android"，SystemUI 主进程为
+     * "com.android.systemui"。允许 "*" 表示所有进程（但作用域已限定上述两包）。
      */
     public static final String[] TARGET_PROCESS_SUFFIXES = {""};
 
-    /**
-     * Process suffixes that are never hooked, even if {@link #TARGET_PROCESS_SUFFIXES} matches.
-     * These cover the most common anti-cheat / telemetry / pusher satellites that games ship.
-     * Add your own; keep the defaults.
-     */
+    /** 永不注入的进程后缀（卫星进程等）。 */
     public static final String[] SKIP_PROCESS_SUFFIXES = {
             ":push", ":pushservice", ":pushcore",
             ":remote", ":service", ":core",
@@ -40,39 +39,36 @@ public final class TemplateConfig {
             ":privilege", ":stub"
     };
 
-    public static final String MENU_BUBBLE_TEXT = "Nyx";
-    public static final String MENU_TITLE = "Universal Module";
-    public static final String MENU_SUBTITLE = "By Nyxane";
+    public static final String MENU_BUBBLE_TEXT = "MP";
+    public static final String MENU_TITLE = "MultiProjection Framework";
+    public static final String MENU_SUBTITLE = "By FairyXH";
 
-    /** Shows the floating button and movable rectangular menu inside the target Activity. */
+    /** 是否启用悬浮菜单（SystemUI 侧可见；system_server 无 Activity 环境不启用）。 */
     public static final boolean ENABLE_OVERLAY = true;
 
-    /** Loads app/src/main/cpp and initializes ByteDance ShadowHook. Requires arm/arm64 process. */
-    public static final boolean ENABLE_NATIVE_SHADOWHOOK = true;
+    /** 纯 Java 模块：不加载任何 native 库。 */
+    public static final boolean ENABLE_NATIVE_SHADOWHOOK = false;
 
     /** Pulled from BuildConfig so release builds strip verbose logs automatically. */
     public static final boolean VERBOSE_LOGS = BuildConfig.VERBOSE_LOGS;
 
-    /** Enable verbose ShadowHook logs only while debugging. */
-    public static final boolean SHADOWHOOK_DEBUG_LOGS = VERBOSE_LOGS;
+    /** 诊断日志总开关（独立于 VERBOSE_LOGS，默认开启以支持阶段 5 只读诊断）。 */
+    public static final boolean DIAGNOSTICS_ENABLED = true;
 
-    /** Operation records are useful while developing native hooks. */
-    public static final boolean SHADOWHOOK_RECORDS = VERBOSE_LOGS;
+    /** 多会话系统服务改造总开关（阶段 7 高风险功能，默认关闭，须显式开启）。 */
+    public static final boolean MULTI_SESSION_ENABLED = false;
+
+    /** SystemUI 录制范围选择增强（阶段 6，默认关闭，逐项开启）。 */
+    public static final boolean RANGE_CHOICE_ENHANCED = false;
 
     /**
      * Log tag used everywhere in the module. Keep it bland; module-branded tags are trivially
      * greppable in logcat by target-app integrity sweeps.
      */
-    public static final String LOG_TAG = "AppRuntime";
+    public static final String LOG_TAG = "MPFw";
 
     /** Thread name used for deferred module initialization inside target processes. */
-    public static final String WORKER_THREAD_NAME = "AppRuntimeWorker";
-
-    /**
-     * Name of the native library loaded by {@link NativeBridge}. The tooling script can rename
-     * this plus the CMake target and {@code System.loadLibrary} call with {@code --native-lib}.
-     */
-    public static final String NATIVE_LIBRARY_NAME = "template_native";
+    public static final String WORKER_THREAD_NAME = "MPFwWorker";
 
     /** Best-effort runtime toggle state filename under the target app's files directory. */
     public static final String FEATURE_STATE_FILE_NAME = ".rt_state";
@@ -87,8 +83,7 @@ public final class TemplateConfig {
 
     /**
      * Process-level filter applied after {@link #shouldHook(String)}. The {@code processName}
-     * argument is the value returned by {@code ModuleLoadedParam.getProcessName()}
-     * (e.g. {@code "com.example.target"}, {@code "com.example.target:push"}).
+     * argument is the value returned by {@code ModuleLoadedParam.getProcessName()}.
      */
     public static boolean shouldHookProcess(String packageName, String processName) {
         if (!shouldHook(packageName)) return false;

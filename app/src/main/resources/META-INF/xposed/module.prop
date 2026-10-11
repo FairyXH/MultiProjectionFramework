@@ -1,13 +1,13 @@
-id=com.template.lsposed
-name=LSPosed Universal Template
+id=com.fairyxh.multiprojection
+name=MultiProjection Framework
 version=v0.1.0
 versionCode=1
-author=YourName
-description=Modern libxposed API 102 template for Vector and LSPatch 1.2, with movable overlay and optional ShadowHook native scaffold for authorized testing.
+author=FairyXH
+description=Android 15 / ColorOS 15 多路 MediaProjection 会话框架（仅 system 与 com.android.systemui 作用域）。支持多个 App 独立授权/录制/停止生命周期，保留系统授权弹窗与一次性 Token 语义。
 minApiVersion=102
 targetApiVersion=102
 staticScope=true
-# Native hooks, worker threads, and Activity lifecycle callbacks need explicit teardown before hot reload is safe.
+# Java-only module: worker threads and Activity lifecycle callbacks need explicit teardown before hot reload is safe.
 autoHotReload=false
 # Protective catches/logs hooker exceptions and lets the original call continue.
 exceptionMode=protective

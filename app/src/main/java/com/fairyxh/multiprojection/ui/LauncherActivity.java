@@ -1,4 +1,4 @@
-package com.template.lsposed.ui;
+package com.fairyxh.multiprojection.ui;
 
 import android.app.Activity;
 import android.graphics.Color;
@@ -9,8 +9,8 @@ import android.view.Gravity;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import com.template.lsposed.R;
-import com.template.lsposed.TemplateConfig;
+import com.fairyxh.multiprojection.R;
+import com.fairyxh.multiprojection.TemplateConfig;
 
 /** Simple launcher screen so the APK is easy to identify after install. */
 public final class LauncherActivity extends Activity {
