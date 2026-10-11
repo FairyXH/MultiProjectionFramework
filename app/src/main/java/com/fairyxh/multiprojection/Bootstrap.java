@@ -18,6 +18,7 @@ import io.github.libxposed.api.XposedInterface;
 public final class Bootstrap {
     private static volatile boolean started;
     private static volatile boolean overlayAttached;
+    private static volatile boolean systemServerStarted;
 
     private Bootstrap() {}
 
@@ -40,6 +41,23 @@ public final class Bootstrap {
         }
         if (TemplateConfig.VERBOSE_LOGS) {
             Log.i(TemplateConfig.LOG_TAG, "Bootstrap started in process=" + app.getPackageName());
+        }
+    }
+
+    /**
+     * system_server 专用初始化入口（无 Application/Context）。
+     * 只安装只读诊断 Hook；不附加悬浮菜单、不初始化 FeatureRegistry 文件存储。
+     */
+    public static synchronized void startForSystemServer(XposedInterface api) {
+        if (systemServerStarted || api == null) return;
+        systemServerStarted = true;
+        try {
+            Diagnostics.installForSystemServer(api);
+            if (TemplateConfig.VERBOSE_LOGS) {
+                Log.i(TemplateConfig.LOG_TAG, "Bootstrap started for system_server");
+            }
+        } catch (Throwable t) {
+            Log.e(TemplateConfig.LOG_TAG, "system_server bootstrap failed", t);
         }
     }
 

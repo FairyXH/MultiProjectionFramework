@@ -23,10 +23,11 @@ public final class TemplateConfig {
     };
 
     /**
-     * 进程后缀白名单：system_server 主进程为 "android"，SystemUI 主进程为
-     * "com.android.systemui"。允许 "*" 表示所有进程（但作用域已限定上述两包）。
+     * 进程后缀白名单：system_server 主进程名为 "system"（包名 android），SystemUI 主进程为
+     * "com.android.systemui"。{@code ""} 表示主进程（进程名==包名）。
+     * 允许 "*" 表示所有进程（但作用域已限定上述两包）。
      */
-    public static final String[] TARGET_PROCESS_SUFFIXES = {""};
+    public static final String[] TARGET_PROCESS_SUFFIXES = {"", "system"};
 
     /** 永不注入的进程后缀（卫星进程等）。 */
     public static final String[] SKIP_PROCESS_SUFFIXES = {

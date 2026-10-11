@@ -17,11 +17,15 @@ import io.github.libxposed.api.XposedModule;
  * each scoped target process. Process-level filtering is enforced here (see
  * {@link TemplateConfig}) so the module does not bloat satellite processes such as {@code :push},
  * {@code :pushservice}, {@code :gameservice}, or dedicated anti-cheat processes.</p>
+ *
+ * <p>system_server 进程名是 {@code "system"}（包名 android），没有 Application.attach 生命周期，
+ * 必须在 {@link #onPackageLoaded} 直接走 system-server 初始化路径。</p>
  */
 public final class ModuleEntry extends XposedModule {
     private volatile String processName;
     private volatile boolean applicationAttachHookInstalled;
     private volatile boolean applicationContextReady;
+    private volatile boolean systemServerReady;
 
     @Override
     public void onModuleLoaded(ModuleLoadedParam param) {
@@ -59,7 +63,30 @@ public final class ModuleEntry extends XposedModule {
                     + " dataDir=" + param.getApplicationInfo().dataDir);
         }
 
+        // system_server（进程名 "system"，包名 android）没有 Application.attach 生命周期，
+        // 直接走系统服务初始化路径（只读诊断 Hook）。
+        if ("system".equals(proc)) {
+            initSystemServer();
+            return;
+        }
+
         installApplicationAttachHook();
+    }
+
+    /** system_server 专用初始化：安装只读诊断 Hook（不需要 Context/Application）。 */
+    private synchronized void initSystemServer() {
+        if (systemServerReady) return;
+        systemServerReady = true;
+        try {
+            if (TemplateConfig.VERBOSE_LOGS) {
+                log(Log.INFO, TemplateConfig.LOG_TAG, "Initializing system_server diagnostics");
+            }
+            Bootstrap.startForSystemServer(this);
+        } catch (Throwable t) {
+            if (TemplateConfig.VERBOSE_LOGS) {
+                log(Log.ERROR, TemplateConfig.LOG_TAG, "system_server init failed", t);
+            }
+        }
     }
 
     @SuppressLint("DiscouragedPrivateApi") // Xposed needs this stable pre-Activity context handoff.

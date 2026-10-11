@@ -40,6 +40,18 @@ public final class Diagnostics {
             }
             return;
         }
+        startInstallThread(api);
+    }
+
+    /** system_server 专用安装入口（由 Bootstrap.startForSystemServer 调用，无 Context）。 */
+    public static void installForSystemServer(final XposedInterface api) {
+        if (api == null) return;
+        if (installed) return;
+        installed = true;
+        startInstallThread(api);
+    }
+
+    private static void startInstallThread(final XposedInterface api) {
         Thread t = new Thread(new Runnable() {
             @Override
             public void run() {
