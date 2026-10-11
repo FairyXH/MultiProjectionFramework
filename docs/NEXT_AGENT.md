@@ -56,13 +56,13 @@ export GRADLE_USER_HOME=/opt/gradle-home
 4. 调起任意 App 录屏 → 观察 startProjectionLocked/stopProjectionLocked/setContentRecordingSession 日志
 5. 阶段 6：SystemUI 范围选择 Hook（createOptionList 解除禁用）
 
-## 阶段 5 部署状态（2026-10-11 17:05 更新）
-- ✅ 首次重启后确认注入成功：`(system)[com.fairyxh.multiprojection] Loaded in process=system, api=102` + `(com.android.systemui) Hooked Application.attach`
-- ⚠️ **发现缺陷**：system_server 只有 `onModuleLoaded`，**没有 `Application.attach`**（进程名 `system` 无 Application 生命周期）→ 诊断 Hook 从未安装
-- 🔧 **已修复**（commit ae47063）：ModuleEntry 识别 `proc=="system"` 走 `startForSystemServer`（直连无 Context）；TemplateConfig 白名单加 `"system"`；Diagnostics 新增 `installForSystemServer`
-- 📦 新 APK（2.52MB）已覆盖安装成功（17:03）；LSPosed 仍启用（enabled=1），作用域：android + com.android.systemui + system
-- ⏳ **待再次手动重启** → system_server 加载新 APK 后应输出 `[Diag] server diagnostics installed`
-- 重启后验证：`logcat -d -s MPFw:D` 应有 `Initializing system_server diagnostics` + `[Diag] server diagnostics installed`；调起录屏应有 startProjectionLocked/stopProjectionLocked 日志
+## 阶段 5 部署状态（2026-10-11 17:20 更新）
+- ✅ 已确认 system_server 注入成功（`Loaded in process=system`）但**诊断未安装**（无 Application.attach）
+- 🔬 **根因确认**：libxposed API 102 的 `XposedModuleInterface` 有专门的 **`onSystemServerStarting(SystemServerStartingParam)`** 回调（提供 getClassLoader），这才是 system_server 初始化正确入口；`onPackageLoaded` 在 system_server 不触发
+- 🔧 **已修复**（commit e18b221）：ModuleEntry 覆写 `onSystemServerStarting` → `Bootstrap.startForSystemServer(this)` → `Diagnostics.installForSystemServer`
+- 📦 新 APK 已构建+安装成功（17:17）；LSPosed 启用状态保留（enabled=1）
+- ⏳ **待再次手动重启** → 应输出 `onSystemServerStarting, installing diagnostics` + `[Diag] server diagnostics installed`
+- 重启后验证：`logcat -d -s MPFw:D`；调起录屏应有 startProjectionLocked/stopProjectionLocked 日志
 
 ## 风险提醒
 - 阶段 5/7 启用 system 作用域前必须获用户批准 + 说明 bootloop 风险。
