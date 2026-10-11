@@ -26,6 +26,7 @@ public final class Diagnostics {
     private static volatile boolean installed;
     private static volatile long lastLogTs;
     private static volatile XposedInterface sApi;
+    private static volatile ClassLoader sClassLoader;
 
     private Diagnostics() {}
 
@@ -44,11 +45,12 @@ public final class Diagnostics {
     }
 
     /** system_server 专用安装入口（由 Bootstrap.startForSystemServer 调用，无 Context）。 */
-    public static void installForSystemServer(final XposedInterface api) {
+    public static void installForSystemServer(final XposedInterface api, final ClassLoader classLoader) {
         if (api == null) return;
         if (installed) return;
         installed = true;
         sApi = api;
+        sClassLoader = classLoader;
         logI("installForSystemServer called, spawning install thread");
         startInstallThread(api);
     }
@@ -89,6 +91,15 @@ public final class Diagnostics {
     }
 
     private static Class<?> findServerClass() {
+        // 优先使用 system_server 的 boot classloader（SystemServerStartingParam.getClassLoader()），
+        // 它才能加载 MediaProjectionManagerService 等服务端内部类；否则退回默认加载器。
+        try {
+            if (sClassLoader != null) {
+                return Class.forName(SERVER_CLASS, false, sClassLoader);
+            }
+        } catch (Throwable t) {
+            logW("load via system classloader failed: " + t);
+        }
         try {
             return Class.forName(SERVER_CLASS);
         } catch (Throwable t) {

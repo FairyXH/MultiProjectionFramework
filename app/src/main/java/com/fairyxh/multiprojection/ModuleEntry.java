@@ -54,7 +54,7 @@ public final class ModuleEntry extends XposedModule {
             if (TemplateConfig.VERBOSE_LOGS) {
                 log(Log.INFO, TemplateConfig.LOG_TAG, "onSystemServerStarting, installing diagnostics");
             }
-            Bootstrap.startForSystemServer(this);
+            Bootstrap.startForSystemServer(this, param.getClassLoader());
         } catch (Throwable t) {
             if (TemplateConfig.VERBOSE_LOGS) {
                 log(Log.ERROR, TemplateConfig.LOG_TAG, "system_server init failed", t);

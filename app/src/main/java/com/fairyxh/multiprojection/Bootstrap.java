@@ -47,12 +47,16 @@ public final class Bootstrap {
     /**
      * system_server 专用初始化入口（无 Application/Context）。
      * 只安装只读诊断 Hook；不附加悬浮菜单、不初始化 FeatureRegistry 文件存储。
+     *
+     * @param api      libxposed API 实例
+     * @param classLoader system_server 进程的类加载器（SystemServerStartingParam.getClassLoader()），
+     *                    用于加载 MediaProjectionManagerService 等 system_server 内部类
      */
-    public static synchronized void startForSystemServer(XposedInterface api) {
+    public static synchronized void startForSystemServer(XposedInterface api, ClassLoader classLoader) {
         if (systemServerStarted || api == null) return;
         systemServerStarted = true;
         try {
-            Diagnostics.installForSystemServer(api);
+            Diagnostics.installForSystemServer(api, classLoader);
             if (TemplateConfig.VERBOSE_LOGS) {
                 Log.i(TemplateConfig.LOG_TAG, "Bootstrap started for system_server");
             }
