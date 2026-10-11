@@ -42,6 +42,26 @@ public final class ModuleEntry extends XposedModule {
         }
     }
 
+    /**
+     * system_server 专用回调：在 system_server 启动早期调用（早于任何 package 加载）。
+     * 这里安装只读诊断 Hook。
+     */
+    @Override
+    public void onSystemServerStarting(SystemServerStartingParam param) {
+        if (systemServerReady) return;
+        systemServerReady = true;
+        try {
+            if (TemplateConfig.VERBOSE_LOGS) {
+                log(Log.INFO, TemplateConfig.LOG_TAG, "onSystemServerStarting, installing diagnostics");
+            }
+            Bootstrap.startForSystemServer(this);
+        } catch (Throwable t) {
+            if (TemplateConfig.VERBOSE_LOGS) {
+                log(Log.ERROR, TemplateConfig.LOG_TAG, "system_server init failed", t);
+            }
+        }
+    }
+
     @Override
     public void onPackageLoaded(PackageLoadedParam param) {
         preparePackage(param, "onPackageLoaded");
@@ -63,30 +83,8 @@ public final class ModuleEntry extends XposedModule {
                     + " dataDir=" + param.getApplicationInfo().dataDir);
         }
 
-        // system_server（进程名 "system"，包名 android）没有 Application.attach 生命周期，
-        // 直接走系统服务初始化路径（只读诊断 Hook）。
-        if ("system".equals(proc)) {
-            initSystemServer();
-            return;
-        }
-
+        // system_server 由 onSystemServerStarting 专门处理，不在这里初始化。
         installApplicationAttachHook();
-    }
-
-    /** system_server 专用初始化：安装只读诊断 Hook（不需要 Context/Application）。 */
-    private synchronized void initSystemServer() {
-        if (systemServerReady) return;
-        systemServerReady = true;
-        try {
-            if (TemplateConfig.VERBOSE_LOGS) {
-                log(Log.INFO, TemplateConfig.LOG_TAG, "Initializing system_server diagnostics");
-            }
-            Bootstrap.startForSystemServer(this);
-        } catch (Throwable t) {
-            if (TemplateConfig.VERBOSE_LOGS) {
-                log(Log.ERROR, TemplateConfig.LOG_TAG, "system_server init failed", t);
-            }
-        }
     }
 
     @SuppressLint("DiscouragedPrivateApi") // Xposed needs this stable pre-Activity context handoff.
