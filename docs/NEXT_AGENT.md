@@ -50,10 +50,19 @@ export GRADLE_USER_HOME=/opt/gradle-home
 | `jadx/services/.../ContentRecorder.java` | 每 Display 单录制器 |
 
 ## 下一步（等待用户批准后执行）
-1. **阶段 5**：编码只读诊断模块（Hook MediaProjectionManagerService 关键方法只读日志，不修改行为）。
-2. 构建 → 请用户安装 APK + 在 LSPosed 勾选作用域 → 用户手动重启 → 验证日志。
-3. 阶段 6：SystemUI 范围选择 Hook（createOptionList 解除禁用）。
-4. 阶段 7（需再次批准）：多会话系统服务改造。
+1. ✅ **阶段 5**：诊断模块已编码+构建+安装+启用（见下）
+2. ⏳ **等待用户手动重启设备** → system_server 注入生效
+3. 重启后验证：`logcat -s MPFw` 应见 `[Diag] server diagnostics installed` 及 MediaProjection 方法日志
+4. 调起任意 App 录屏 → 观察 startProjectionLocked/stopProjectionLocked/setContentRecordingSession 日志
+5. 阶段 6：SystemUI 范围选择 Hook（createOptionList 解除禁用）
+
+## 阶段 5 部署状态（2026-10-11 16:50）
+- APK：`/sdcard/Download/MultiProjectionFramework/MultiProjectionFramework-debug.apk`（2.51MB）
+- 已安装：`pm install -r /data/local/tmp/MultiProjectionFramework-debug.apk` → Success
+- LSPosed 已识别：modules 表含 `com.fairyxh.multiprojection`
+- 已启用：`modules_state.enabled=1`（user 0）
+- 作用域：`system` + `com.android.systemui`（scope 表已插入）
+- **待用户手动重启生效**（Agent 不擅自杀 system_server / 不 reboot）
 
 ## 风险提醒
 - 阶段 5/7 启用 system 作用域前必须获用户批准 + 说明 bootloop 风险。

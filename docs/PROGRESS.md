@@ -14,7 +14,7 @@
 | 阶段 2 JADX 反编译 | ✅ 关键类已单类反编译：MediaProjectionManagerService（完整1272行）、MediaProjectionConfig、ContentRecordingSession、ContentRecorder、ContentRecordingController、SystemUI 授权链（PermissionActivity/ServiceHelper/DialogDelegate/BaseDelegate/ScreenShareOption/AppSelector） |
 | 阶段 3 调用链追踪 | ✅ 端到端链路 A/B/C/D 已追踪，写入 ARCHITECTURE.md + SESSION_MODEL.md |
 | 阶段 4 方案设计 | ⏳ 进行中（多会话改造受 ContentRecordingController 全局单会话限制） |
-| 阶段 5 只读诊断模块 | ⏳ 待编码 |
+| 阶段 5 只读诊断模块 | ✅ 编码+构建+安装+启用完成；**待用户手动重启验证日志** |
 | 阶段 6 SystemUI 范围选择 | ⏳ 未开始（Hook 点已明确：createOptionList 解除禁用） |
 | 阶段 7 多会话系统服务 | ⏳ 未开始（高风险需批准） |
 | 阶段 8 测试矩阵 | ⏳ 未开始 |
