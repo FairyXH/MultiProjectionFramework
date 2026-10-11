@@ -25,6 +25,7 @@ public final class Diagnostics {
     private static final long RETRY_MS = 1500L;
     private static volatile boolean installed;
     private static volatile long lastLogTs;
+    private static volatile XposedInterface sApi;
 
     private Diagnostics() {}
 
@@ -33,11 +34,10 @@ public final class Diagnostics {
         if (api == null || context == null) return;
         if (installed) return;
         installed = true;
+        sApi = api;
         final String pkg = context.getPackageName();
         if (!"android".equals(pkg)) {
-            if (TemplateConfig.VERBOSE_LOGS) {
-                Log.i(TemplateConfig.LOG_TAG, "[Diag] skip server diag in process " + pkg);
-            }
+            logI("skip server diag in process " + pkg);
             return;
         }
         startInstallThread(api);
@@ -48,6 +48,8 @@ public final class Diagnostics {
         if (api == null) return;
         if (installed) return;
         installed = true;
+        sApi = api;
+        logI("installForSystemServer called, spawning install thread");
         startInstallThread(api);
     }
 
@@ -55,6 +57,7 @@ public final class Diagnostics {
         Thread t = new Thread(new Runnable() {
             @Override
             public void run() {
+                logI("diag thread started");
                 tryInstall(api, MAX_ATTEMPTS);
             }
         }, "MPFw-Diag");
@@ -66,6 +69,7 @@ public final class Diagnostics {
         try {
             Class<?> cls = findServerClass();
             if (cls == null) {
+                logW("class not found: " + SERVER_CLASS + " (attempts left=" + attemptsRemaining + ")");
                 if (attemptsRemaining > 1) {
                     try {
                         Thread.sleep(RETRY_MS);
@@ -73,15 +77,14 @@ public final class Diagnostics {
                         return;
                     }
                     tryInstall(api, attemptsRemaining - 1);
-                } else {
-                    Log.w(TemplateConfig.LOG_TAG, "[Diag] class not found after retries: " + SERVER_CLASS);
                 }
                 return;
             }
+            logI("found class " + SERVER_CLASS + ", installing hooks");
             installHooks(api, cls);
-            Log.i(TemplateConfig.LOG_TAG, "[Diag] server diagnostics installed");
+            logI("server diagnostics installed");
         } catch (Throwable t) {
-            Log.e(TemplateConfig.LOG_TAG, "[Diag] install failed", t);
+            logE("install failed", t);
         }
     }
 
@@ -138,14 +141,14 @@ public final class Diagnostics {
                         try {
                             result = chain.proceed();
                         } catch (Throwable t) {
-                            Log.w(TemplateConfig.LOG_TAG, "[Diag] " + name + " threw " + t.getClass().getSimpleName());
+                            logW(name + " threw " + t.getClass().getSimpleName());
                             throw t;
                         }
                         log(name + " exit result=" + (result == null ? "null" : result.getClass().getSimpleName()));
                         return result;
                     });
         } catch (Throwable t) {
-            Log.w(TemplateConfig.LOG_TAG, "[Diag] hook " + name + " failed: " + t.getMessage());
+            logW("hook " + name + " failed: " + t.getMessage());
         }
     }
 
@@ -154,7 +157,36 @@ public final class Diagnostics {
         long now = System.currentTimeMillis();
         if (now - lastLogTs < 2000L) return;
         lastLogTs = now;
+        logI(msg);
+    }
+
+    // ---- LSPosed log() API 为主，android.util.Log 兜底（system_server 中 util.Log 可能不可见） ----
+
+    private static void logI(String msg) {
+        try {
+            XposedInterface api = sApi;
+            if (api != null) api.log(Log.INFO, TemplateConfig.LOG_TAG, "[Diag] " + msg);
+        } catch (Throwable ignored) {
+        }
         Log.i(TemplateConfig.LOG_TAG, "[Diag] " + msg);
+    }
+
+    private static void logW(String msg) {
+        try {
+            XposedInterface api = sApi;
+            if (api != null) api.log(Log.WARN, TemplateConfig.LOG_TAG, "[Diag] " + msg);
+        } catch (Throwable ignored) {
+        }
+        Log.w(TemplateConfig.LOG_TAG, "[Diag] " + msg);
+    }
+
+    private static void logE(String msg, Throwable t) {
+        try {
+            XposedInterface api = sApi;
+            if (api != null) api.log(Log.ERROR, TemplateConfig.LOG_TAG, "[Diag] " + msg + (t != null ? " #" + t : ""));
+        } catch (Throwable ignored) {
+        }
+        Log.e(TemplateConfig.LOG_TAG, "[Diag] " + msg, t);
     }
 
     private static String describe(Object thiz, Object[] args, String argDesc) {
