@@ -56,17 +56,13 @@ export GRADLE_USER_HOME=/opt/gradle-home
 4. 调起任意 App 录屏 → 观察 startProjectionLocked/stopProjectionLocked/setContentRecordingSession 日志
 5. 阶段 6：SystemUI 范围选择 Hook（createOptionList 解除禁用）
 
-## 阶段 5 部署状态（2026-10-11 19:15 更新）
-- ✅ `onSystemServerStarting` **已确认触发**（19:03:30 日志 `onSystemServerStarting, installing diagnostics`），system_server 初始化入口正确
-- ⚠️ **新发现**：`android.util.Log` 在 system_server 中**不可观测**（logcat 完全无 MPFw 日志），导致 `Diagnostics` 内部的安装成败/异常被吞掉
-- 🔧 **已修复**（commit 12e1732）：Diagnostics 全部日志改用 `XposedInterface.log()`（走 LSPosed log daemon，100% 可见）+ util.Log 双写兜底；安装流程加详细步骤日志（thread started / class found / hooks installed / install failed）
-- 📦 新 APK（2.52MB）已构建+安装成功（19:09）；LSPosed 启用保留
-- ⏳ **待再次手动重启** → LSPosed log daemon 中应能看到完整流程：
-  - `onSystemServerStarting, installing diagnostics`
-  - `diag thread started`
-  - `found class MediaProjectionManagerService, installing hooks` 或 `class not found ...`
-  - `server diagnostics installed` 或 `install failed ...`
-- 验证命令：`grep -a 'MPFw\|Diag' /data/adb/lspd/log/modules_*.log | tail -30`
+## 阶段 5 部署状态（2026-10-11 20:45 更新）
+- ✅ **完整链路已打通**（20:34 重启验证）：`Loaded → onSystemServerStarting → installForSystemServer → diag thread started`，日志可观测性方案有效
+- ❌ **新根因**：`class not found: com.android.server.media.projection.MediaProjectionManagerService`（6 次重试全失败）——`Class.forName` 用模块默认 classloader，找不到 system_server 内部类（services.jar 中的类需 boot/system classloader）
+- 🔧 **已修复**（commit bce354a）：`onSystemServerStarting(param.getClassLoader())` → Bootstrap → Diagnostics；`findServerClass()` 优先用 system classloader 加载，失败记录详情
+- 📦 新 APK 已构建+安装成功（20:38）；LSPosed 启用保留
+- ⏳ **待重启验证** → 应出现 `found class MediaProjectionManagerService, installing hooks` + `server diagnostics installed`；若仍失败会有 `load via system classloader failed: ...` 异常详情
+- 验证命令：`grep -a 'multiprojection' /data/adb/lspd/log/modules_*.log | tail -25`
 
 ## 风险提醒
 - 阶段 5/7 启用 system 作用域前必须获用户批准 + 说明 bootloop 风险。
