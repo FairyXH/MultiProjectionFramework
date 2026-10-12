@@ -130,8 +130,8 @@ public final class AutoGrantHook {
                     }
                 });
 
-        // 2. createProjectionInternal 返回后：命中规则则缓存投影（供 getProjection 兜底），
-        //    并（单应用）预置 task session
+        // 2. createProjectionInternal 返回后：命中规则则预置 ContentRecordingSession
+        //    （整屏 createDisplaySession / 单应用 createTaskSession）
         final Method create = serverCls.getDeclaredMethod("createProjectionInternal",
                 int.class, String.class, int.class, boolean.class, UserHandle.class);
         create.setAccessible(true);
@@ -151,7 +151,6 @@ public final class AutoGrantHook {
                             // 整屏 -> createDisplaySession(0)；单应用 -> createTaskSession(targetPkg)
                             // 免弹窗分支创建的投影 mSession 为 null，VD 创建会失败 -> 搜题酱重试
                             injectContentSession(result, projection, crs, rule);
-                            cacheProjection(uid, pkg, result);
                         }
                         return result;
                     } catch (Throwable t) {
@@ -160,33 +159,12 @@ public final class AutoGrantHook {
                     }
                 });
 
-        // 3. getProjectionInternal 兜底：命中规则且该 uid/pkg 有缓存投影时直接返回，
-        //    绕开 mProjectionGrant.mSession.isWaitingForConsent() 检查（免弹窗分支 session 为 null）
-        final Method getProjection = serverCls.getDeclaredMethod("getProjectionInternal",
-                int.class, String.class);
-        getProjection.setAccessible(true);
-        sApi.hook(getProjection)
-                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
-                .intercept(chain -> {
-                    Object result = chain.proceed();
-                    try {
-                        Object[] args = chain.getArgs() == null ? null : chain.getArgs().toArray();
-                        int uid = args != null && args.length > 0 && args[0] instanceof Integer
-                                ? (Integer) args[0] : -1;
-                        String pkg = args != null && args.length > 1 ? String.valueOf(args[1]) : null;
-                        if (result == null) {
-                            Object cached = getCachedProjection(uid, pkg);
-                            if (cached != null) {
-                                logI("getProjection fallback: uid=" + uid + " pkg=" + pkg);
-                                return cached;
-                            }
-                        }
-                        return result;
-                    } catch (Throwable t) {
-                        logW("getProjectionInternal handler failed: " + t);
-                        return result;
-                    }
-                });
+// 3. getProjectionInternal：不再 hook、不再缓存兜底。
+        //    【重要】此前诊断版加了"缓存兜底"，导致 SystemUI createOrReuseProjection
+        //    在 consent_required=true 时 getProjection 复用到旧投影（已 start / 已建 VD），
+        //    isValid() 失败 -> SecurityException -> 搜题酱反复重试 -> 状态栏闪烁。
+        //    恢复原生语义：getProjection 始终返回 null（无 waitingForConsent 投影）,
+        //    每次都 createProjection 新建，等价于正常弹窗路径。
 
         // 4. MediaProjection.start/stop 诊断：记录规则内 App 投影生命周期，定位失败环节
         try {
@@ -248,43 +226,8 @@ public final class AutoGrantHook {
         return null;
     }
 
-    // ---- 投影缓存（getProjection 兜底用）----
-    // 免弹窗分支创建的投影 mSession 为 null，getProjectionInternal 的
-    // isWaitingForConsent() 检查会失败。这里缓存 uid+pkg → projection，
-    // getProjectionInternal 返回 null 时直接返回缓存对象。TTL 30 秒防泄漏。
-
-    private static final class ProjectionEntry {
-        final Object projection;
-        final long expireAt;
-
-        ProjectionEntry(Object projection, long expireAt) {
-            this.projection = projection;
-            this.expireAt = expireAt;
-        }
-    }
-
-    private static final java.util.Map<String, ProjectionEntry> PROJECTION_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
-
-    private static String cacheKey(int uid, String pkg) {
-        return uid + "|" + pkg;
-    }
-
-    private static void cacheProjection(int uid, String pkg, Object projection) {
-        if (projection == null || pkg == null) return;
-        PROJECTION_CACHE.put(cacheKey(uid, pkg), new ProjectionEntry(projection,
-                System.currentTimeMillis() + 30_000L));
-    }
-
-    private static Object getCachedProjection(int uid, String pkg) {
-        if (pkg == null) return null;
-        ProjectionEntry e = PROJECTION_CACHE.get(cacheKey(uid, pkg));
-        if (e == null) return null;
-        if (System.currentTimeMillis() > e.expireAt) {
-            PROJECTION_CACHE.remove(cacheKey(uid, pkg));
-            return null;
-        }
-        return e.projection;
-    }
+    // ---- 投影缓存已移除：getProjectionInternal 不再 hook，
+    //      恢复原生语义（无 waitingForConsent 投影时返回 null -> 每次都新建）。
 
     private static String typeName(int mode) {
         switch (mode) {
