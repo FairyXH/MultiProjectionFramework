@@ -59,8 +59,8 @@ public final class TemplateConfig {
     /** 多会话系统服务改造总开关（阶段 7 高风险功能，默认关闭，须显式开启）。 */
     public static final boolean MULTI_SESSION_ENABLED = false;
 
-    /** SystemUI 录制范围选择增强（阶段 6，默认关闭，逐项开启）。 */
-    public static final boolean RANGE_CHOICE_ENHANCED = false;
+    /** SystemUI 录制范围选择增强（阶段 6，验证期默认开启；正式发布前可改回 false 由悬浮菜单控制）。 */
+    public static final boolean RANGE_CHOICE_ENHANCED = true;
 
     /**
      * Log tag used everywhere in the module. Keep it bland; module-branded tags are trivially
