@@ -152,3 +152,31 @@ export GRADLE_USER_HOME=/opt/gradle-home
 ### 待用户重启验证
 - 预期日志：`auto-grant hit: uid=10343 pkg=com.zmzx.college.search mode=full_screen ctx=true`
 - 若未命中，看 `hasProjectionPermission check: uid=.. pkg=.. ctx=.. rule=..` 定位 ctx 或 rule 哪个环节断
+
+## 阶段6b 二次实测：ctx=true 但 rule=false → 规则读取路径修复（2026-10-12 21:35）
+
+### 现象（第二次重启后）
+- 诊断日志：`hasProjectionPermission check: uid=10343 pkg=com.zmzx.college.search ctx=true rule=false`
+- **ctx=true**（上轮 Context 修复已生效），但 **rule=false**（规则仍未读到）
+
+### 根因
+- 重启后模块 App 处于 stopped/未运行状态（`dumpsys package` 显示 User 0 stopped=true、notLaunched=false）
+- ContentProvider 无法自动拉起 stopped 的 App → Provider 查询失败 → 规则读不到
+
+### 修复（commit d1408cd）
+- **RuleStore 主路径改为直读 `/data/misc/mpfw/rules.json`**（不再依赖 App 进程存活）
+  - 已验证：`su system -c cat /data/misc/mpfw/rules.json` 成功（uid=1000 可读）
+  - 目录 755 + 文件 644，root 写入
+- RulesConfig.syncToSystemPath：配置页保存时经 `su -c` 同步规则到 /data/misc/mpfw
+- RulesActivity 增删规则统一走 persistRules（私有保存 + 系统路径同步）
+- RuleProviderHelper 封装 ContentProvider 兜底查询（仅当 /data/misc 副本缺失时）
+
+### 关键事实（勿重踩）
+1. system_server uid=1000 **不是 root**，读不了 App 私有文件（0600）
+2. 重启后模块 App 会进入 stopped 状态，ContentProvider 无法自动拉起 → Provider 桥在重启后不可靠
+3. **/data/misc/mpfw/**（755 + 644）是 system_server 可读、重启保留、root 可写的可靠通道
+4. 配置页经 su(root) 写 /data/misc —— 需 KernelSU 授权模块 App 的 su；若未授权则静默失败（Provider 兜底）
+
+### 待用户重启验证
+- 预期：`auto-grant hit: uid=10343 pkg=com.zmzx.college.search mode=full_screen ctx=true`
+- 新 APK 已装（21:37），system_server 需重启加载新 dex

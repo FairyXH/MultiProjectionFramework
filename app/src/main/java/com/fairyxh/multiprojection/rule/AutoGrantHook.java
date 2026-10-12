@@ -130,7 +130,8 @@ public final class AutoGrantHook {
                     }
                 });
 
-        // 2. createProjectionInternal 返回后：单应用规则 -> 预置 task session
+        // 2. createProjectionInternal 返回后：命中规则则缓存投影（供 getProjection 兜底），
+        //    并（单应用）预置 task session
         final Method create = serverCls.getDeclaredMethod("createProjectionInternal",
                 int.class, String.class, int.class, boolean.class, UserHandle.class);
         create.setAccessible(true);
@@ -140,11 +141,16 @@ public final class AutoGrantHook {
                     Object result = chain.proceed();
                     try {
                         Object[] args = chain.getArgs() == null ? null : chain.getArgs().toArray();
+                        int uid = args != null && args.length > 0 && args[0] instanceof Integer
+                                ? (Integer) args[0] : -1;
                         String pkg = args != null && args.length > 1 ? String.valueOf(args[1]) : null;
                         android.content.Context ctx = resolveContext(chain);
                         RulesConfig.Rule rule = RuleStore.findRule(ctx, pkg);
-                        if (rule != null && rule.mode != RulesConfig.MODE_FULL_SCREEN && result != null) {
-                            injectTaskSession(result, projection, crs, rule);
+                        if (rule != null && result != null) {
+                            if (rule.mode != RulesConfig.MODE_FULL_SCREEN) {
+                                injectTaskSession(result, projection, crs, rule);
+                            }
+                            cacheProjection(uid, pkg, result);
                         }
                         return result;
                     } catch (Throwable t) {
@@ -152,6 +158,140 @@ public final class AutoGrantHook {
                         return result;
                     }
                 });
+
+        // 3. getProjectionInternal 兜底：命中规则且该 uid/pkg 有缓存投影时直接返回，
+        //    绕开 mProjectionGrant.mSession.isWaitingForConsent() 检查（免弹窗分支 session 为 null）
+        final Method getProjection = serverCls.getDeclaredMethod("getProjectionInternal",
+                int.class, String.class);
+        getProjection.setAccessible(true);
+        sApi.hook(getProjection)
+                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                .intercept(chain -> {
+                    Object result = chain.proceed();
+                    try {
+                        Object[] args = chain.getArgs() == null ? null : chain.getArgs().toArray();
+                        int uid = args != null && args.length > 0 && args[0] instanceof Integer
+                                ? (Integer) args[0] : -1;
+                        String pkg = args != null && args.length > 1 ? String.valueOf(args[1]) : null;
+                        if (result == null) {
+                            Object cached = getCachedProjection(uid, pkg);
+                            if (cached != null) {
+                                logI("getProjection fallback: uid=" + uid + " pkg=" + pkg);
+                                return cached;
+                            }
+                        }
+                        return result;
+                    } catch (Throwable t) {
+                        logW("getProjectionInternal handler failed: " + t);
+                        return result;
+                    }
+                });
+
+        // 4. MediaProjection.start/stop 诊断：记录规则内 App 投影生命周期，定位失败环节
+        try {
+            final Method mpStart = projection.getDeclaredMethod("start", Class.forName("android.media.projection.IMediaProjectionCallback", false, cl));
+            mpStart.setAccessible(true);
+            sApi.hook(mpStart)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(chain -> {
+                        Object result;
+                        try {
+                            result = chain.proceed();
+                            logI("projection.start OK: pkg=" + pkgOfProjection(chain.getThisObject()));
+                        } catch (Throwable t) {
+                            logW("projection.start EX: pkg=" + pkgOfProjection(chain.getThisObject()) + " #" + t);
+                            throw t;
+                        }
+                        return result;
+                    });
+        } catch (Throwable t) {
+            logW("hook MediaProjection.start failed: " + t);
+        }
+        try {
+            final Method mpStop = projection.getDeclaredMethod("stop");
+            mpStop.setAccessible(true);
+            sApi.hook(mpStop)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(chain -> {
+                        logI("projection.stop: pkg=" + pkgOfProjection(chain.getThisObject()));
+                        return chain.proceed();
+                    });
+        } catch (Throwable t) {
+            logW("hook MediaProjection.stop failed: " + t);
+        }
+    }
+
+    /** 从 MediaProjection 实例（内部类）读 public 字段 packageName。 */
+    private static String pkgOfProjection(Object projection) {
+        if (projection == null) return "?";
+        try {
+            java.lang.reflect.Field f = projection.getClass().getField("packageName");
+            Object v = f.get(projection);
+            return v == null ? "?" : v.toString();
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    /** 从 BinderService 实例反射取 this$0（外层 MediaProjectionManagerService）。 */
+    private static Object outerService(Object binderService) throws Throwable {
+        for (Class<?> c = binderService.getClass(); c != null; c = c.getSuperclass()) {
+            try {
+                java.lang.reflect.Field f = c.getDeclaredField("this$0");
+                f.setAccessible(true);
+                Object svc = f.get(binderService);
+                if (svc != null) return svc;
+            } catch (NoSuchFieldException ignored) {
+            }
+        }
+        return null;
+    }
+
+    // ---- 投影缓存（getProjection 兜底用）----
+    // 免弹窗分支创建的投影 mSession 为 null，getProjectionInternal 的
+    // isWaitingForConsent() 检查会失败。这里缓存 uid+pkg → projection，
+    // getProjectionInternal 返回 null 时直接返回缓存对象。TTL 30 秒防泄漏。
+
+    private static final class ProjectionEntry {
+        final Object projection;
+        final long expireAt;
+
+        ProjectionEntry(Object projection, long expireAt) {
+            this.projection = projection;
+            this.expireAt = expireAt;
+        }
+    }
+
+    private static final java.util.Map<String, ProjectionEntry> PROJECTION_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static String cacheKey(int uid, String pkg) {
+        return uid + "|" + pkg;
+    }
+
+    private static void cacheProjection(int uid, String pkg, Object projection) {
+        if (projection == null || pkg == null) return;
+        PROJECTION_CACHE.put(cacheKey(uid, pkg), new ProjectionEntry(projection,
+                System.currentTimeMillis() + 30_000L));
+    }
+
+    private static Object getCachedProjection(int uid, String pkg) {
+        if (pkg == null) return null;
+        ProjectionEntry e = PROJECTION_CACHE.get(cacheKey(uid, pkg));
+        if (e == null) return null;
+        if (System.currentTimeMillis() > e.expireAt) {
+            PROJECTION_CACHE.remove(cacheKey(uid, pkg));
+            return null;
+        }
+        return e.projection;
+    }
+
+    private static String typeName(int mode) {
+        switch (mode) {
+            case RulesConfig.MODE_FULL_SCREEN: return "full_screen";
+            case RulesConfig.MODE_SINGLE_SELF: return "single_self";
+            case RulesConfig.MODE_SINGLE_TARGET: return "single_target";
+            default: return "unknown(" + mode + ")";
+        }
     }
 
     /**
