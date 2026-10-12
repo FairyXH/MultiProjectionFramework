@@ -206,3 +206,27 @@ export GRADLE_USER_HOME=/opt/gradle-home
 - `projection.start OK` → start 成功，问题在后续 VD 创建/isValid
 - `projection.start EX: java.lang.SecurityException` → FGS 或复用检查失败
 - 无 start 日志 → App 在 getMediaProjection 前就失败（onActivityResult 异常）
+
+## 阶段6b 四次实测：循环根因锁定为 getProjection 缓存兜底（2026-10-12 23:00）
+
+### 现象（第四次重启后，跑 session注入版 22:37 装的）
+- ✅ injected content session: mode=full_screen 生效
+- ❌ 循环依旧：auto-grant hit -> start OK -> stop 每 0.5-1s 一次
+- 用户反馈：闪烁几下后正常可截图，但只能退到桌面用
+
+### 根因（决定性分析）
+- SystemUI 免弹窗分支 createOrReuseProjection(uid,pkg,consent_required=true)：
+  `projection = z ? getProjection(uid,pkg) : null; return projection==null ? createProjection(...) : projection;`
+- 诊断版(ab7d2c8)加的 getProjection 缓存兜底：返回缓存的上一个投影（已 start/已建VD）
+- 搜题酱复用旧投影 -> isValid() 失败(mCountStarts>1/已建VD) -> SecurityException -> 重试 -> 循环
+- 闪烁几下后正常 = 缓存偶尔过期(TTL 30s)才新建成功
+
+### 修复（commit 65100bf，23:06 已部署）
+- 完全移除 getProjection hook + 投影缓存（ProjectionEntry/PROJECTION_CACHE 等）
+- 恢复原生语义：getProjection 返回 null（注入session waitingForConsent=false 不满足复用）
+  -> 每次都 createProjection 新建 -> 等价正常弹窗路径
+- 保留 ContentRecordingSession 注入（整屏 createDisplaySession(0) / 单应用 createTaskSession）
+
+### 待重启验证
+- 预期：不再循环、一次成功、无闪烁
+- 若仍循环：需查 WMS setContentRecordingSession 是否失败（失败会 stop 投影 315行）

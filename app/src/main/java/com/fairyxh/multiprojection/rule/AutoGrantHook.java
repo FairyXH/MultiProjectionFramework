@@ -192,7 +192,28 @@ public final class AutoGrantHook {
             sApi.hook(mpStop)
                     .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                     .intercept(chain -> {
-                        logI("projection.stop: pkg=" + pkgOfProjection(chain.getThisObject()));
+                        Object thiz = chain.getThisObject();
+                        String who = "?";
+                        try {
+                            // 读 mVirtualDisplayId 与 mCountStarts，判断 stop 时投影状态
+                            java.lang.reflect.Field vdF = thiz.getClass().getDeclaredField("mVirtualDisplayId");
+                            vdF.setAccessible(true);
+                            int vdId = (Integer) vdF.get(thiz);
+                            java.lang.reflect.Field csF = thiz.getClass().getDeclaredField("mCountStarts");
+                            csF.setAccessible(true);
+                            int countStarts = (Integer) csF.get(thiz);
+                            logI("projection.stop: pkg=" + pkgOfProjection(thiz)
+                                    + " vdId=" + vdId + " countStarts=" + countStarts);
+                        } catch (Throwable t) {
+                            logI("projection.stop: pkg=" + pkgOfProjection(thiz) + " (state read fail: " + t + ")");
+                        }
+                        // 调用栈前8帧，判定 stop 来源
+                        StackTraceElement[] st = Thread.currentThread().getStackTrace();
+                        StringBuilder sb = new StringBuilder("  stop caller:");
+                        for (int i = 2; i < Math.min(st.length, 10); i++) {
+                            sb.append("\n    at ").append(st[i]);
+                        }
+                        logI(sb.toString());
                         return chain.proceed();
                     });
         } catch (Throwable t) {
