@@ -100,18 +100,11 @@ public final class RulesConfig {
                 Log.w(TAG, "mkdir failed: " + dir);
                 return false;
             }
-            JSONArray arr = new JSONArray();
-            for (Rule r : rules) {
-                JSONObject o = new JSONObject();
-                o.put("appPkg", r.appPkg);
-                o.put("mode", r.mode);
-                if (r.targetPkg != null) o.put("targetPkg", r.targetPkg);
-                arr.put(o);
-            }
+            String json = toJson(rules);
             File f = new File(dir, FILE_NAME);
             File tmp = new File(dir, FILE_NAME + ".tmp");
             try (FileOutputStream out = new FileOutputStream(tmp)) {
-                out.write(arr.toString().getBytes(StandardCharsets.UTF_8));
+                out.write(json.getBytes(StandardCharsets.UTF_8));
                 out.flush();
             }
             if (f.exists() && !f.delete()) {
@@ -128,13 +121,55 @@ public final class RulesConfig {
         }
     }
 
-    /** 查找申请方对应的规则；无则返回 null。 */
+    /** 将规则列表转成 JSON 数组字符串。 */
+    public static String toJson(List<Rule> rules) {
+        JSONArray arr = new JSONArray();
+        if (rules != null) {
+            for (Rule r : rules) {
+                JSONObject o = new JSONObject();
+                try {
+                    o.put("appPkg", r.appPkg);
+                    o.put("mode", r.mode);
+                    if (r.targetPkg != null) o.put("targetPkg", r.targetPkg);
+                } catch (Throwable ignored) {
+                }
+                arr.put(o);
+            }
+        }
+        return arr.toString();
+    }
+/** 查找申请方对应的规则；无则返回 null。 */
     public static Rule findFor(List<Rule> rules, String appPkg) {
         if (rules == null || appPkg == null) return null;
         for (Rule r : rules) {
             if (appPkg.equals(r.appPkg)) return r;
         }
         return null;
+    }
+
+    /**
+     * 将规则 JSON 同步到 system_server 可读的全局路径（root 写入）。
+     *
+     * <p>模块 App 自身无权限写 /data/misc/mpfw/，必须经 su(root) 执行。
+     * 若设备未授权 App 的 su 调用，此同步静默失败（规则仍保存在 App 私有目录，
+     * 经 ContentProvider 兜底，但需要 App 进程存活）。</p>
+     */
+    public static void syncToSystemPath(String rulesJson) {
+        try {
+            if (rulesJson == null) return;
+            Process p = Runtime.getRuntime().exec(new String[]{
+                    "su", "-c",
+                    "mkdir -p /data/misc/mpfw && chmod 755 /data/misc/mpfw && "
+                            + "echo '" + rulesJson.replace("'", "'\\''") + "' > /data/misc/mpfw/rules.json && "
+                            + "chmod 644 /data/misc/mpfw/rules.json"
+            });
+            int code = p.waitFor();
+            if (code != 0) {
+                Log.w(TAG, "syncToSystemPath su failed: " + code);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "syncToSystemPath failed: " + t);
+        }
     }
 
     /** 单应用规则的实际录制目标包名：自身=appPkg，自定义=targetPkg（可为 null）。 */

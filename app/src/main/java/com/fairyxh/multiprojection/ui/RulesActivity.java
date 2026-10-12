@@ -117,7 +117,7 @@ public final class RulesActivity extends Activity {
         del.setOnClickListener(v -> {
             List<RulesConfig.Rule> next = new ArrayList<>(all);
             next.remove(rule);
-            RulesConfig.save(getFilesDir(), next);
+            persistRules(next);
             refreshList();
         });
         row.addView(del);
@@ -180,11 +180,19 @@ public final class RulesActivity extends Activity {
                     }
                     List<RulesConfig.Rule> all = RulesConfig.load(getFilesDir());
                     all.add(new RulesConfig.Rule(pkg, mode[0], target));
-                    RulesConfig.save(getFilesDir(), all);
+                    persistRules(all);
                     refreshList();
                 })
                 .setNegativeButton("取消", null)
                 .show();
+    }
+
+    /** 保存规则到 App 私有目录，并同步到 system_server 可读的 /data/misc/mpfw/rules.json。 */
+    private void persistRules(List<RulesConfig.Rule> rules) {
+        if (RulesConfig.save(getFilesDir(), rules)) {
+            // 生成 JSON 并同步到系统路径（需 su root）
+            RulesConfig.syncToSystemPath(RulesConfig.toJson(rules));
+        }
     }
 
     private int dp(float value) {
