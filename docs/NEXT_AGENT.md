@@ -88,3 +88,41 @@ export GRADLE_USER_HOME=/opt/gradle-home
 - 阶段 5/7 启用 system 作用域前必须获用户批准 + 说明 bootloop 风险。
 - 任何重启由用户手动执行，Agent 不 reboot。
 - 大文件（extracted/、jadx/、logs/、builds/）已 gitignore，不入库。
+## 阶段 6b（自动授权不弹窗）— 2026-10-12 编码完成，待重启验证
+
+### 需求与方案
+- 需求：规则内 App 发起 MediaProjection 时**自动授权、完全不弹窗**；根治"频繁掉授权"（logcat 实证：com.zmzx.college.search 每几秒触发一次 createProjection）。
+- 核心机制（反编译确认）：SystemUI `MediaProjectionPermissionActivity.onCreate()` 中 `hasProjectionPermission(uid,pkg)==true` → 直接 `createOrReuseProjection` + `setResult(-1)` + `finish()`，**完全不弹窗**。
+- 实现：hook system_server `MediaProjectionManagerService$BinderService.hasProjectionPermission(int,String)` 命中规则返回 true。
+
+### 新增文件
+| 文件 | 作用 |
+|---|---|
+| `rule/RulesConfig.java` | 规则模型（appPkg + mode[整屏0/单应用自身1/单应用自定义2] + targetPkg） + JSON 存取 files/rules.json |
+| `rule/RuleStore.java` | system_server 侧读规则（模块 dataDir 由 Bootstrap 解析后注入） |
+| `rule/AutoGrantHook.java` | system_server Hook：hasProjectionPermission→true；createProjectionInternal 返回后注入 task session（单应用） |
+| `ui/RulesActivity.java` | 模块 App 配置页（新增/删除规则） |
+| `LauncherActivity` 增加"自动授权规则"入口 |
+
+### 单应用模式（task session 注入）
+- `RunningTaskInfo/TaskInfo`（反编译确认）：`topActivity`/`baseActivity` 是 **ComponentName** 字段、`token` 是 **WindowContainerToken** 字段、`taskId` 是 int 字段。
+- `WindowContainer.fromBinder(token)` = `RemoteToken.fromBinder(binder).getContainer()` → token 必须是绑定到目标 Task 的 RemoteToken binder。
+- `ContentRecordingSession.createTaskSession(token, taskId)` 构造 task session → 反射写入 projection.mSession → App 建 VD 后 `notifyVirtualDisplayCreated` 自动推给 WMS。
+- 注入点：`createProjectionInternal` 返回后反射写 mSession；task 查询用 `ActivityManager.getService().getTasks(100,true,false,-1)`。
+
+### 部署状态
+- ✅ 构建成功：`app/build/outputs/apk/debug/app-debug.apk`（2.5MB）
+- ✅ 已安装到设备（pm install -r -d Success）
+- ✅ RulesActivity 可正常打开（topResumedActivity 验证）
+- ✅ 已写入测试规则：`com.zmzx.college.search` mode=0（整屏）到 `files/rules.json`
+- ⏳ **待重启 system_server 生效**（约定：重启由用户手动执行）
+
+### 验证步骤（重启后）
+1. `grep -a 'AutoGrant' /data/adb/lspd/log/modules_*.log | tail` → 应见 `AutoGrantHook installed`
+2. 打开大学搜题酱（com.zmzx.college.search）触发录屏 → 应**不弹窗直接授权**，日志见 `auto-grant hit: uid=10343 pkg=com.zmzx.college.search mode=full_screen`
+3. 未配置规则 App（如微信）录屏 → 仍正常弹窗
+
+### 关键坑（勿重踩）
+1. `android.app.ActivityThread` 是 @hide，公共 SDK 编译不过 → 必须反射（Bootstrap.resolveModuleDataDir 已用 Class.forName）
+2. system_server 无 Application 生命周期，FeatureRegistry 未初始化 → AutoGrant 开关用 `TemplateConfig.AUTO_GRANT_ENABLED`（默认 true）而非 FeatureRegistry.getBool
+3. `chain.getArgs().toArray()` 返回 Object[]，需判空
