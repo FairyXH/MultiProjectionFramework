@@ -130,3 +130,25 @@ export GRADLE_USER_HOME=/opt/gradle-home
 1. `android.app.ActivityThread` 是 @hide，公共 SDK 编译不过 → 必须反射（Bootstrap.resolveModuleDataDir 已用 Class.forName）
 2. system_server 无 Application 生命周期，FeatureRegistry 未初始化 → AutoGrant 开关用 `TemplateConfig.AUTO_GRANT_ENABLED`（默认 true）而非 FeatureRegistry.getBool
 3. `chain.getArgs().toArray()` 返回 Object[]，需判空
+
+## 阶段6b 首次实测失败 → 根因与修复（2026-10-12 21:20）
+
+### 现象
+- 重启后 `AutoGrantHook installed` 成功（日志确认）
+- 但大学搜题酱触发录屏时仍弹窗，无 `auto-grant hit` 日志
+
+### 根因（已定位）
+- `Bootstrap.getSystemServerContext()` 反射 `ActivityThread.currentActivityThread().getApplication()`
+  在 system_server 中返回 **null**（system_server 没有 Application）
+- → AutoGrantHook.sContext=null → `RuleStore.findRule(null, pkg)` 永不命中 → 不影响原逻辑但也不自动授权
+
+### 修复（commit 5ce5456）
+- **不再依赖 Bootstrap 传 Context**：hook 回调内从 `chain.getThisObject()`（BinderService 实例）
+  反射取 `this$0` → 外层 `MediaProjectionManagerService` → 读 `mContext` 字段（反编译确认存在）
+  或 `getContext()` 方法，成功后缓存到 sResolvedContext
+- 加限频诊断日志（5秒窗口）：未命中时输出 `ctx= / rule=` 状态
+- 注意：`XposedInterface.HookCallback` 不是公开类型不能作参数 → resolveContext 用 Object + 反射 getThisObject()
+
+### 待用户重启验证
+- 预期日志：`auto-grant hit: uid=10343 pkg=com.zmzx.college.search mode=full_screen ctx=true`
+- 若未命中，看 `hasProjectionPermission check: uid=.. pkg=.. ctx=.. rule=..` 定位 ctx 或 rule 哪个环节断
