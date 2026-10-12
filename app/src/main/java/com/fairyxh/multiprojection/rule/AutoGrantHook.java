@@ -41,6 +41,8 @@ public final class AutoGrantHook {
     private static volatile XposedInterface sApi;
     private static volatile ClassLoader sClassLoader;
     private static volatile android.content.Context sContext;
+    /** 已确认可用的 Context（首次成功解析后缓存，避免反复反射）。 */
+    private static volatile android.content.Context sResolvedContext;
 
     private AutoGrantHook() {}
 
@@ -112,12 +114,15 @@ public final class AutoGrantHook {
                         int uid = args != null && args.length > 0 && args[0] instanceof Integer
                                 ? (Integer) args[0] : -1;
                         String pkg = args != null && args.length > 1 ? String.valueOf(args[1]) : null;
-                        RulesConfig.Rule rule = RuleStore.findRule(sContext, pkg);
+                        android.content.Context ctx = resolveContext(chain);
+                        RulesConfig.Rule rule = ctx == null ? null : RuleStore.findRule(ctx, pkg);
                         if (rule != null) {
                             logI("auto-grant hit: uid=" + uid + " pkg=" + pkg
-                                    + " mode=" + modeName(rule.mode));
+                                    + " mode=" + modeName(rule.mode) + " ctx=" + (ctx != null));
                             return Boolean.TRUE;
                         }
+                        logThrottled("hasProjectionPermission check: uid=" + uid + " pkg=" + pkg
+                                + " ctx=" + (ctx != null) + " rule=" + (rule != null));
                         return result;
                     } catch (Throwable t) {
                         logW("hasProjectionPermission handler failed: " + t);
@@ -136,7 +141,8 @@ public final class AutoGrantHook {
                     try {
                         Object[] args = chain.getArgs() == null ? null : chain.getArgs().toArray();
                         String pkg = args != null && args.length > 1 ? String.valueOf(args[1]) : null;
-                        RulesConfig.Rule rule = RuleStore.findRule(sContext, pkg);
+                        android.content.Context ctx = resolveContext(chain);
+                        RulesConfig.Rule rule = RuleStore.findRule(ctx, pkg);
                         if (rule != null && rule.mode != RulesConfig.MODE_FULL_SCREEN && result != null) {
                             injectTaskSession(result, projection, crs, rule);
                         }
@@ -146,6 +152,64 @@ public final class AutoGrantHook {
                         return result;
                     }
                 });
+    }
+
+    /**
+     * 从 hook 回调的 this 对象解析 system_server Context。
+     *
+     * <p>优先取 sResolvedContext 缓存；否则从 BinderService 实例反射取外层
+     * MediaProjectionManagerService（构造入参 mContext，或 SystemService.getContext()）。
+     * 若仍为 null，退回 sContext（Bootstrap 传入，system_server 中可能为 null）。</p>
+     *
+     * <p>参数用 Object 而非 XposedInterface.HookCallback（后者不是公开类型，编译不过）。</p>
+     */
+    private static android.content.Context resolveContext(Object chainObj) {
+        android.content.Context cached = sResolvedContext;
+        if (cached != null) return cached;
+        android.content.Context resolved = null;
+        try {
+            Object thiz = chainObj == null ? null
+                    : chainObj.getClass().getMethod("getThisObject").invoke(chainObj);
+            if (thiz != null) {
+                // BinderService 是 MediaProjectionManagerService 的非静态内部类，字段 this$0 指向外层实例
+                for (Class<?> c = thiz.getClass(); c != null; c = c.getSuperclass()) {
+                    try {
+                        java.lang.reflect.Field outer = c.getDeclaredField("this$0");
+                        outer.setAccessible(true);
+                        Object svc = outer.get(thiz);
+                        if (svc != null) {
+                            resolved = contextFromService(svc);
+                            if (resolved != null) break;
+                        }
+                    } catch (NoSuchFieldException ignored) {
+                        // 继续向上找
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            logW("resolveContext failed: " + t);
+        }
+        if (resolved == null) resolved = sContext;
+        if (resolved != null) sResolvedContext = resolved;
+        return resolved;
+    }
+
+    /** 从 MediaProjectionManagerService 实例获取 Context：优先 mContext 字段，退回 getContext()。 */
+    private static android.content.Context contextFromService(Object svc) throws Throwable {
+        try {
+            java.lang.reflect.Field f = svc.getClass().getDeclaredField("mContext");
+            f.setAccessible(true);
+            Object v = f.get(svc);
+            if (v instanceof android.content.Context) return (android.content.Context) v;
+        } catch (NoSuchFieldException ignored) {
+        }
+        try {
+            Method m = svc.getClass().getMethod("getContext");
+            Object v = m.invoke(svc);
+            if (v instanceof android.content.Context) return (android.content.Context) v;
+        } catch (NoSuchMethodException ignored) {
+        }
+        return null;
     }
 
     /** 为单应用规则预置 task session 到 projection.mSession（反射，避免编译期依赖内部类型）。 */
@@ -320,6 +384,17 @@ public final class AutoGrantHook {
     }
 
     // ---- 日志 ----
+
+    private static volatile long sLastThrottledTs;
+
+    /** 限频日志（5 秒窗口内同一消息只记一次），避免高频 hasProjectionPermission 调用刷屏。 */
+    private static void logThrottled(String msg) {
+        long now = System.currentTimeMillis();
+        long last = sLastThrottledTs;
+        if (now - last < 5000L) return;
+        sLastThrottledTs = now;
+        logI(msg);
+    }
 
     private static String modeName(int mode) {
         switch (mode) {
