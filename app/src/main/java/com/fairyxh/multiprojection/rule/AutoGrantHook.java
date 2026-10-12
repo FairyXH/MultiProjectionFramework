@@ -40,16 +40,18 @@ public final class AutoGrantHook {
     private static volatile boolean installed;
     private static volatile XposedInterface sApi;
     private static volatile ClassLoader sClassLoader;
+    private static volatile android.content.Context sContext;
 
     private AutoGrantHook() {}
 
     /** system_server 专用安装入口（由 Bootstrap.startForSystemServer 调用）。 */
-    public static void install(XposedInterface api, ClassLoader classLoader) {
+    public static void install(XposedInterface api, ClassLoader classLoader, android.content.Context context) {
         if (api == null) return;
         if (installed) return;
         installed = true;
         sApi = api;
         sClassLoader = classLoader;
+        sContext = context;
         Thread t = new Thread(new Runnable() {
             @Override
             public void run() {
@@ -110,7 +112,7 @@ public final class AutoGrantHook {
                         int uid = args != null && args.length > 0 && args[0] instanceof Integer
                                 ? (Integer) args[0] : -1;
                         String pkg = args != null && args.length > 1 ? String.valueOf(args[1]) : null;
-                        RulesConfig.Rule rule = RuleStore.findRule(pkg);
+                        RulesConfig.Rule rule = RuleStore.findRule(sContext, pkg);
                         if (rule != null) {
                             logI("auto-grant hit: uid=" + uid + " pkg=" + pkg
                                     + " mode=" + modeName(rule.mode));
@@ -134,7 +136,7 @@ public final class AutoGrantHook {
                     try {
                         Object[] args = chain.getArgs() == null ? null : chain.getArgs().toArray();
                         String pkg = args != null && args.length > 1 ? String.valueOf(args[1]) : null;
-                        RulesConfig.Rule rule = RuleStore.findRule(pkg);
+                        RulesConfig.Rule rule = RuleStore.findRule(sContext, pkg);
                         if (rule != null && rule.mode != RulesConfig.MODE_FULL_SCREEN && result != null) {
                             injectTaskSession(result, projection, crs, rule);
                         }

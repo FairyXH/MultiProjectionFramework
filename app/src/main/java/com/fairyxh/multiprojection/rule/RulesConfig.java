@@ -65,7 +65,18 @@ public final class RulesConfig {
                     off += n;
                 }
             }
-            JSONArray arr = new JSONArray(new String(bytes, StandardCharsets.UTF_8));
+            return parse(new String(bytes, StandardCharsets.UTF_8));
+        } catch (Throwable t) {
+            Log.w(TAG, "load rules failed: " + t);
+            return new ArrayList<>(0);
+        }
+    }
+
+    /** 从 JSON 字符串解析规则列表（供 system_server 经 Provider 读取后解析）；异常返回空列表。 */
+    public static List<Rule> parse(String json) {
+        try {
+            if (json == null || json.trim().isEmpty()) return new ArrayList<>(0);
+            JSONArray arr = new JSONArray(json);
             List<Rule> out = new ArrayList<>(arr.length());
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.getJSONObject(i);
@@ -77,7 +88,7 @@ public final class RulesConfig {
             }
             return out;
         } catch (Throwable t) {
-            Log.w(TAG, "load rules failed: " + t);
+            Log.w(TAG, "parse rules failed: " + t);
             return new ArrayList<>(0);
         }
     }

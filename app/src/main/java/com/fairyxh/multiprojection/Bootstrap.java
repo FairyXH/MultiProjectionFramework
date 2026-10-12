@@ -65,8 +65,8 @@ public final class Bootstrap {
             Diagnostics.installForSystemServer(api, classLoader);
             // 阶段 6b：自动授权（规则命中才生效，未配置规则时不改变任何行为）
             if (TemplateConfig.AUTO_GRANT_ENABLED) {
-                resolveModuleDataDir();
-                com.fairyxh.multiprojection.rule.AutoGrantHook.install(api, classLoader);
+                android.content.Context ctx = getSystemServerContext();
+                com.fairyxh.multiprojection.rule.AutoGrantHook.install(api, classLoader, ctx);
             }
             if (TemplateConfig.VERBOSE_LOGS) {
                 Log.i(TemplateConfig.LOG_TAG, "Bootstrap started for system_server");
@@ -76,34 +76,21 @@ public final class Bootstrap {
         }
     }
 
-    /** 解析模块 App 数据目录并设置到 RuleStore（system_server 有 root，可查任意包）。 */
-    private static void resolveModuleDataDir() {
-        String dataDir = null;
+    /** 反射获取 system_server 进程的全局 Context（ActivityThread 是 @hide，公共 SDK 编译不过）。 */
+    private static android.content.Context getSystemServerContext() {
         try {
-            // ActivityThread 在公共 SDK 中 @hide，用反射访问（system_server 环境必然存在）
             Class<?> atClass = Class.forName("android.app.ActivityThread");
             Object at = atClass.getMethod("currentActivityThread").invoke(null);
             if (at != null) {
                 Object app = atClass.getMethod("getApplication").invoke(at);
                 if (app instanceof android.content.Context) {
-                    android.content.pm.PackageManager pm =
-                            ((android.content.Context) app).getPackageManager();
-                    android.content.pm.ApplicationInfo ai = pm.getApplicationInfo(
-                            "com.fairyxh.multiprojection", 0);
-                    dataDir = ai.dataDir;
+                    return (android.content.Context) app;
                 }
             }
         } catch (Throwable t) {
-            Log.w(TemplateConfig.LOG_TAG, "resolve module dataDir via ActivityThread failed: " + t);
+            Log.w(TemplateConfig.LOG_TAG, "getSystemServerContext failed: " + t);
         }
-        if (dataDir == null) {
-            // 兜底：标准单用户路径（system_server 以 root 运行）
-            dataDir = "/data/user/0/com.fairyxh.multiprojection";
-        }
-        com.fairyxh.multiprojection.rule.RuleStore.setModuleDataDir(dataDir);
-        if (TemplateConfig.VERBOSE_LOGS) {
-            Log.i(TemplateConfig.LOG_TAG, "module dataDir=" + dataDir);
-        }
+        return null;
     }
 
     private static void attachOverlay(Context app) {

@@ -99,7 +99,8 @@ export GRADLE_USER_HOME=/opt/gradle-home
 | 文件 | 作用 |
 |---|---|
 | `rule/RulesConfig.java` | 规则模型（appPkg + mode[整屏0/单应用自身1/单应用自定义2] + targetPkg） + JSON 存取 files/rules.json |
-| `rule/RuleStore.java` | system_server 侧读规则（模块 dataDir 由 Bootstrap 解析后注入） |
+| `rule/RuleStore.java` | system_server 侧读规则（经 ContentProvider 桥，App 进程读文件返回 JSON） |
+| `rule/RuleProvider.java` | ContentProvider：以 content://com.fairyxh.multiprojection.rule/rules 暴露 rules.json（system_server uid=1000 无法直接读 App 私有文件 0600，必须桥接） |
 | `rule/AutoGrantHook.java` | system_server Hook：hasProjectionPermission→true；createProjectionInternal 返回后注入 task session（单应用） |
 | `ui/RulesActivity.java` | 模块 App 配置页（新增/删除规则） |
 | `LauncherActivity` 增加"自动授权规则"入口 |
@@ -114,7 +115,10 @@ export GRADLE_USER_HOME=/opt/gradle-home
 - ✅ 构建成功：`app/build/outputs/apk/debug/app-debug.apk`（2.5MB）
 - ✅ 已安装到设备（pm install -r -d Success）
 - ✅ RulesActivity 可正常打开（topResumedActivity 验证）
-- ✅ 已写入测试规则：`com.zmzx.college.search` mode=0（整屏）到 `files/rules.json`
+- ✅ **ContentProvider 桥实测通过**：`content query --uri content://com.fairyxh.multiprojection.rule/rules` 返回
+  `[{"appPkg":"com.zmzx.college.search","mode":0},{"appPkg":"com.chaoxing.mobile","mode":1}]`
+  （注意：force-stop 后 provider 不自动拉起，属正常 stopped 状态行为；system_server 首次调用会自动 bind 模块 App 进程）
+- ✅ 已写入测试规则：`com.zmzx.college.search` mode=0（整屏） + `com.chaoxing.mobile` mode=1（单应用-自身）
 - ⏳ **待重启 system_server 生效**（约定：重启由用户手动执行）
 
 ### 验证步骤（重启后）
