@@ -55,7 +55,26 @@ public final class RangeChoiceHook {
                     .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                     .intercept(chain -> {
                         Object result = chain.proceed();
-                        return enableSingleAppOption(result);
+                        // 运行日志：记录请求参数，便于验证时确认 regionToCapture 与 appName
+                        try {
+                            Object config = chain.getArg(2);
+                            Object appName = chain.getArg(1);
+                            Object forceShow = chain.getArg(3);
+                            int region = -1;
+                            if (config != null) {
+                                java.lang.reflect.Method getRegion = config.getClass().getMethod("getRegionToCapture");
+                                region = ((Integer) getRegion.invoke(config));
+                            }
+                            Object out = enableSingleAppOption(result);
+                            int size = (out instanceof List) ? ((List<?>) out).size() : -1;
+                            logI("createOptionList invoked: appName=" + appName
+                                    + " region=" + region + " forceShow=" + forceShow
+                                    + " -> resultSize=" + size + " (hook applied)");
+                            return out;
+                        } catch (Throwable t) {
+                            logW("createOptionList handler failed: " + t);
+                            return result;
+                        }
                     });
             logI("RangeChoiceHook installed: " + COMPANION_CLASS + "#" + METHOD_NAME);
         } catch (Throwable t) {

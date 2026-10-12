@@ -76,10 +76,13 @@ export GRADLE_USER_HOME=/opt/gradle-home
 - ⚠️ **图标黑名单注意**：pubgmhd/sgame 黑名单强制整屏逻辑在 `getMediaProjectionConfig()`（早于此 Hook），本 Hook 无法按包名区分 → 对黑名单也会放开单应用。如需对黑名单保持强制，需额外按包名负责（待批准）
 - ⚠️ 验证方式：需开启 `range_choice` 开关 + 重启 SystemUI 进程；由 `MediaProjectionPermissionActivity` FIXED_DISPLAY 请求方触发
 
-## 阶段 6 部署状态（2026-10-11 21:15 更新）
-- 🔧 代码已编写（RangeChoiceHook.java + Bootstrap 接入 + TemplateConfig.isSystemUiPackage）
-- ⏳ 待构建成功 + 启用 range_choice 开关 + 验证
-- 验证命令：`grep -a 'RangeChoice' /data/adb/lspd/log/modules_*.log | tail`
+## 阶段 6 部署状态（2026-10-12 15:05 更新）
+- ✅ `RangeChoiceHook` 已成功安装到 SystemUI（15:04 重启 SystemUI 进程验证）：
+  `[RangeChoice] RangeChoiceHook installed: ...MediaProjectionPermissionDialogDelegate$Companion#createOptionList`
+- 🔧 **验证期默认开启** `RANGE_CHOICE_ENHANCED=true`（commit ace2fa0），避免依赖悬浮菜单手动开关
+- ⏳ 已加运行时日志（记录 appName/region/forceShow + 结果），待重新构建安装后触发一次 MediaProjection 授权弹窗验证"单个应用"可选
+- ⚠️ SystemUI 进程可单独 `pkill -f com.android.systemui` 重启（无需整机重启）；模块更新后需重装 APK + 重启 SystemUI 进程
+- 验证命令：`grep -a 'RangeChoice' /data/adb/lspd/log/modules_*.log | tail -10`
 
 ## 风险提醒
 - 阶段 5/7 启用 system 作用域前必须获用户批准 + 说明 bootloop 风险。
