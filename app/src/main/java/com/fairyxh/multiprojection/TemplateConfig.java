@@ -63,6 +63,13 @@ public final class TemplateConfig {
     public static final boolean RANGE_CHOICE_ENHANCED = true;
 
     /**
+     * 自动授权（阶段 6b）：规则内 App 发起 MediaProjection 时自动授权、不弹窗。
+     * 规则列表由模块 App 配置页写入 files/rules.json。默认开启（仅当规则命中才生效，
+     * 未配置规则时不影响任何 App）。
+     */
+    public static final boolean AUTO_GRANT_ENABLED = true;
+
+    /**
      * Log tag used everywhere in the module. Keep it bland; module-branded tags are trivially
      * greppable in logcat by target-app integrity sweeps.
      */

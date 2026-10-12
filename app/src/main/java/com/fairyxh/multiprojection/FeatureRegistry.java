@@ -31,6 +31,7 @@ public final class FeatureRegistry {
     public static final String KEY_DIAGNOSTICS = "diagnostics";
     public static final String KEY_RANGE_CHOICE = "range_choice";
     public static final String KEY_MULTI_SESSION = "multi_session";
+    public static final String KEY_AUTO_GRANT = "auto_grant";
 
     public enum Type { BOOL, FLOAT }
 
@@ -86,6 +87,7 @@ public final class FeatureRegistry {
         register(Feature.bool(KEY_DIAGNOSTICS, "Diagnostics", TemplateConfig.DIAGNOSTICS_ENABLED));
         register(Feature.bool(KEY_RANGE_CHOICE, "Range choice (SystemUI)", TemplateConfig.RANGE_CHOICE_ENHANCED));
         register(Feature.bool(KEY_MULTI_SESSION, "Multi-session (system)", TemplateConfig.MULTI_SESSION_ENABLED));
+        register(Feature.bool(KEY_AUTO_GRANT, "Auto-grant (system)", TemplateConfig.AUTO_GRANT_ENABLED));
 
         if (ctx != null) {
             try {

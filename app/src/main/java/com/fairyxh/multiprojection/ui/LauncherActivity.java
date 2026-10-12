@@ -1,11 +1,15 @@
 package com.fairyxh.multiprojection.ui;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.text.method.LinkMovementMethod;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
@@ -27,9 +31,21 @@ public final class LauncherActivity extends Activity {
         text.setMovementMethod(LinkMovementMethod.getInstance());
         text.setText(getString(R.string.launcher_instructions, getString(R.string.app_name), firstTarget()));
 
+        Button rulesBtn = new Button(this);
+        rulesBtn.setText("自动授权规则");
+        rulesBtn.setOnClickListener(v ->
+                startActivity(new Intent(this, RulesActivity.class)));
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setBackgroundColor(Color.rgb(14, 14, 20));
+        content.addView(text, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        content.addView(rulesBtn, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(Color.rgb(14, 14, 20));
-        scroll.addView(text);
+        scroll.addView(content);
         setContentView(scroll);
     }
 
