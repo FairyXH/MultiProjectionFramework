@@ -180,3 +180,29 @@ export GRADLE_USER_HOME=/opt/gradle-home
 ### 待用户重启验证
 - 预期：`auto-grant hit: uid=10343 pkg=com.zmzx.college.search mode=full_screen ctx=true`
 - 新 APK 已装（21:37），system_server 需重启加载新 dex
+
+## 阶段6b 三次实测：免弹窗生效但投影响无效+高频重试 → 诊断版（2026-10-12 22:00）
+
+### 现象（第三次重启后）
+- ✅ auto-grant hit 生效（不弹窗）
+- ❌ 搜题酱投影无效（media_projection=null，无活动投影）+ 状态栏闪烁
+- 日志：21:43:21-35 每 1-2 秒一次 `createProjectionInternal enter uid=10343 pkg=com.zmzx.college.search`（高频重试）
+
+### 已确认的关键机制（反编译）
+1. framework `MediaProjection.getMediaProjection(code, data)` 纯取 intent 的 EXTRA_MEDIA_PROJECTION binder，**不调服务端 getProjection**
+2. framework `MediaProjection` 构造函数**自动调 `mImpl.start(callback)`**（MediaProjection.java 36行）
+3. 服务端 `MediaProjection.start()`（837-855行）：ColorOS `checkPermission("capture_or_mirror_screen")` 返回值**被忽略**；真正抛异常的是 `requiresForegroundService() && !hasFGS` → SecurityException（854行）
+4. `requiresForegroundService() = targetSdk>=29 && !isPrivileged`（1023-1025行）——搜题酱满足，需 FGS type=32
+5. `isValid()`（982-1003）：超时/mCountStarts>1/已建VD → false → 可能抛 SecurityException
+
+### 当前诊断版（commit ab7d2c8）
+- 加 `MediaProjection.start` hook：记录 `projection.start OK` 或 `projection.start EX: ... #异常`
+- 加 `MediaProjection.stop` hook：记录 `projection.stop`
+- 保留 getProjectionInternal 缓存兜底（uid+pkg→projection，TTL 30s）
+- 已部署设备（22:00）
+
+### 待用户重启验证（这次重启应有决定性答案）
+看日志判断：
+- `projection.start OK` → start 成功，问题在后续 VD 创建/isValid
+- `projection.start EX: java.lang.SecurityException` → FGS 或复用检查失败
+- 无 start 日志 → App 在 getMediaProjection 前就失败（onActivityResult 异常）

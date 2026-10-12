@@ -147,9 +147,10 @@ public final class AutoGrantHook {
                         android.content.Context ctx = resolveContext(chain);
                         RulesConfig.Rule rule = RuleStore.findRule(ctx, pkg);
                         if (rule != null && result != null) {
-                            if (rule.mode != RulesConfig.MODE_FULL_SCREEN) {
-                                injectTaskSession(result, projection, crs, rule);
-                            }
+                            // 为投影预置 ContentRecordingSession：
+                            // 整屏 -> createDisplaySession(0)；单应用 -> createTaskSession(targetPkg)
+                            // 免弹窗分支创建的投影 mSession 为 null，VD 创建会失败 -> 搜题酱重试
+                            injectContentSession(result, projection, crs, rule);
                             cacheProjection(uid, pkg, result);
                         }
                         return result;
@@ -352,36 +353,43 @@ public final class AutoGrantHook {
         return null;
     }
 
-    /** 为单应用规则预置 task session 到 projection.mSession（反射，避免编译期依赖内部类型）。 */
-    private static void injectTaskSession(Object projection, Class<?> projectionCls, Class<?> crsCls,
-                                          RulesConfig.Rule rule) throws Throwable {
-        String targetPkg = RulesConfig.effectiveTargetPkg(rule);
-        if (targetPkg == null || targetPkg.isEmpty()) return;
-
-        // 通过 ActivityTaskManager.getService().getTasks() 查目标包前台 task
-        Object taskInfo = findForegroundTask(targetPkg);
-        if (taskInfo == null) {
-            logW("no foreground task for target=" + targetPkg);
-            return;
+    /** 为命中规则投影预置 ContentRecordingSession（免弹窗分支创建的投影 mSession=null，VD 创建会失败）。
+     *  整屏 -> createDisplaySession(0)；单应用 -> createTaskSession(前台目标 task)。 */
+    private static void injectContentSession(Object projection, Class<?> projectionCls, Class<?> crsCls,
+                                             RulesConfig.Rule rule) throws Throwable {
+        Object session;
+        if (rule.mode == RulesConfig.MODE_FULL_SCREEN) {
+            // RECORD_CONTENT_DISPLAY(0) + TARGET_UID_FULL_SCREEN(-1)，displayToRecord=0（主屏）
+            session = crsCls.getMethod("createDisplaySession", int.class).invoke(null, 0);
+            if (session == null) {
+                logW("createDisplaySession returned null");
+                return;
+            }
+        } else {
+            String targetPkg = RulesConfig.effectiveTargetPkg(rule);
+            if (targetPkg == null || targetPkg.isEmpty()) return;
+            Object taskInfo = findForegroundTask(targetPkg);
+            if (taskInfo == null) {
+                logW("no foreground task for target=" + targetPkg);
+                return;
+            }
+            IBinder token = taskToken(taskInfo);
+            int taskId = taskId(taskInfo);
+            if (token == null) {
+                logW("no token for target task pkg=" + targetPkg + " taskId=" + taskId);
+                return;
+            }
+            session = crsCls.getMethod("createTaskSession", IBinder.class, int.class)
+                    .invoke(null, token, taskId);
         }
-        IBinder token = taskToken(taskInfo);
-        int taskId = taskId(taskInfo);
-        if (token == null) {
-            logW("no token for target task pkg=" + targetPkg + " taskId=" + taskId);
-            return;
-        }
-
-        // ContentRecordingSession.createTaskSession(IBinder token, int taskId)
-        Object session = crsCls.getMethod("createTaskSession", IBinder.class, int.class)
-                .invoke(null, token, taskId);
 
         // projection.mSession = session（反射写字段）
         Field sessionField = projectionCls.getDeclaredField("mSession");
         sessionField.setAccessible(true);
         sessionField.set(projection, session);
 
-        logI("injected task session: target=" + targetPkg + " taskId=" + taskId
-                + " token=" + token.getClass().getSimpleName());
+        logI("injected content session: mode=" + modeName(rule.mode)
+                + " session=" + session.getClass().getSimpleName());
     }
 
     private static Object findForegroundTask(String targetPkg) {
