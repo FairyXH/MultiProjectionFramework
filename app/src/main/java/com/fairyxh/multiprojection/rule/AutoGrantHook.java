@@ -154,7 +154,7 @@ public final class AutoGrantHook {
                             // 同步授予 AppOps OP_PROJECT_MEDIA(46)，等效正常弹窗授权的持久化：
                             // hasProjectionPermission 原逻辑依赖 AppOps noteOp==0 返回 true；
                             // 仅 hook 返回 true 会让服务端实际权限仍 reject -> 投影无效 -> 反复重试
-                            grantProjectMediaAppOp(ctx, uid, pkg);
+                            grantProjectMediaAppOp(chain, ctx, uid, pkg);
                         }
                         return result;
                     } catch (Throwable t) {
@@ -367,12 +367,34 @@ public final class AutoGrantHook {
      * 普通 App 无 CAPTURE_VIDEO_OUTPUT，只能靠 AppOps 46 allow。正常弹窗授权会
      * mAppOps.setMode(46, uid, pkg, 0)；我们的免弹窗分支若不授予，服务端实际权限
      * 仍 reject -> 投影无效/反复重试。</p>
+     *
+     * <p>优先从 createProjectionInternal 的 this 反射取 MediaProjectionManagerService.mAppOps
+     * （反编译 452 行确认字段存在且直接用 setMode），避免 Context.getSystemService 的权限边界。</p>
      */
-    private static void grantProjectMediaAppOp(android.content.Context ctx, int uid, String pkg) {
-        if (ctx == null || pkg == null || uid < 0) return;
+    private static void grantProjectMediaAppOp(Object chainObj, android.content.Context ctx, int uid, String pkg) {
+        if (pkg == null || uid < 0) return;
         try {
-            Object appOps = ctx.getSystemService(android.app.AppOpsManager.class);
-            if (appOps == null) return;
+            Object svc = outerServiceFromChain(chainObj);
+            if (svc == null && ctx != null) {
+                svc = contextService(ctx);
+            }
+            if (svc == null) {
+                logW("grantProjectMediaAppOp: no service instance");
+                return;
+            }
+            Object appOps = fieldFromChain(svc, "mAppOps");
+            if (appOps == null) {
+                // 兜底：Context.getSystemService
+                if (ctx == null) {
+                    logW("grantProjectMediaAppOp: no appOps, no ctx");
+                    return;
+                }
+                appOps = ctx.getSystemService(android.app.AppOpsManager.class);
+            }
+            if (appOps == null) {
+                logW("grantProjectMediaAppOp: appOps null");
+                return;
+            }
             // 反编译确认：createProjectionInternal 里 mAppOps.setMode(46, uid, pkg, 0)
             // （46 = OP_PROJECT_MEDIA，int 版本 + MODE_ALLOWED(0)）
             android.app.AppOpsManager.class.getMethod("setMode",
@@ -380,7 +402,52 @@ public final class AutoGrantHook {
                     .invoke(appOps, 46, uid, pkg, 0);
             logI("granted PROJECT_MEDIA AppOps: uid=" + uid + " pkg=" + pkg);
         } catch (Throwable t) {
-            logW("grantProjectMediaAppOp failed: " + t);
+            logW("grantProjectMediaAppOp failed: " + t + " cause=" + t.getCause());
+        }
+    }
+
+    /** 从 hook chain 的 this 解析外层 MediaProjectionManagerService 实例。 */
+    private static Object outerServiceFromChain(Object chainObj) {
+        try {
+            Object thiz = chainObj == null ? null
+                    : chainObj.getClass().getMethod("getThisObject").invoke(chainObj);
+            if (thiz == null) return null;
+            for (Class<?> c = thiz.getClass(); c != null; c = c.getSuperclass()) {
+                try {
+                    java.lang.reflect.Field outer = c.getDeclaredField("this$0");
+                    outer.setAccessible(true);
+                    Object svc = outer.get(thiz);
+                    if (svc != null) return svc;
+                } catch (NoSuchFieldException ignored) {
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** 反射读实例字段（逐级父类）。 */
+    private static Object fieldFromChain(Object target, String fieldName) {
+        if (target == null) return null;
+        for (Class<?> c = target.getClass(); c != null; c = c.getSuperclass()) {
+            try {
+                java.lang.reflect.Field f = c.getDeclaredField(fieldName);
+                f.setAccessible(true);
+                return f.get(target);
+            } catch (NoSuchFieldException ignored) {
+            } catch (Throwable t) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /** 从 Context 尝试解析服务实例（兜底）。 */
+    private static Object contextService(android.content.Context ctx) {
+        try {
+            return ctx.getSystemService(android.app.AppOpsManager.class);
+        } catch (Throwable t) {
+            return null;
         }
     }
 

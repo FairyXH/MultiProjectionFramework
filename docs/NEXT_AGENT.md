@@ -230,3 +230,29 @@ export GRADLE_USER_HOME=/opt/gradle-home
 ### 待重启验证
 - 预期：不再循环、一次成功、无闪烁
 - 若仍循环：需查 WMS setContentRecordingSession 是否失败（失败会 stop 投影 315行）
+
+## 阶段6b 五次实测：根因 = AppOps OP_PROJECT_MEDIA 未授予（2026-10-13 09:55）
+
+### 现象（跑移除缓存+session注入版 09:51 重启后）
+- stop caller 决定性日志：`at ...MediaProjection.$r8$lambda$pSaMeYhcLhUPzKCyAZ6BcuCIr3E` = binderDied 回调
+- vdId 递增（4,5,...12）说明 VD 创建成功，但投影随即 stop
+- 搜题酱进程 pid 从 29741 变 369（闪退/被杀重启）-> callback binder 死亡 -> stop
+- AppOps：`PROJECT_MEDIA: ignore; rejectTime=+4m4s ago` —— 从未被授予！
+- 用户反馈：搜题酱界面内点悬浮窗 -> 通知栏闪烁 -> 回桌面才能截图；再点 -> 闪退
+
+### 根因（最终确认）
+- hasProjectionPermission 原逻辑 = checkPermission(CAPTURE_VIDEO_OUTPUT) || AppOps.noteOp(46)==0
+- 我们 hook 返回 true 只骗过 SystemUI 免弹窗分支（98-111行）
+- 但服务端真实授权状态（AppOps OP_PROJECT_MEDIA=46）未写入 -> 投影授权语义不完整
+- -> VD 创建/录制异常 -> 搜题酱判定失败反复重试 -> 最终闪退
+- 正常弹窗授权会 mAppOps.setMode(46, uid, pkg, 0)（createProjectionInternal 452行，isPermanentGrant=true）
+
+### 修复（commit 52d7103，已部署 23:1x）
+- createProjectionInternal 命中规则时同步 grantProjectMediaAppOp：
+  `AppOpsManager.setMode(int=46, int uid, String pkg, int=0 MODE_ALLOWED)`
+- 一次写入持久授权，之后 hasProjectionPermission 走原生逻辑即返回 true
+- 保留 ContentRecordingSession 注入（整屏/单应用）+ 移除缓存兜底
+
+### 待重启验证
+- 预期：搜题酱首次授权后 AppOps 46=allow，投影一次成功、不闪烁、不闪退
+- 若仍有问题：查 AppOps 授予是否成功（日志 granted PROJECT_MEDIA AppOps）
