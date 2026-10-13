@@ -151,6 +151,10 @@ public final class AutoGrantHook {
                             // 整屏 -> createDisplaySession(0)；单应用 -> createTaskSession(targetPkg)
                             // 免弹窗分支创建的投影 mSession 为 null，VD 创建会失败 -> 搜题酱重试
                             injectContentSession(result, projection, crs, rule);
+                            // 同步授予 AppOps OP_PROJECT_MEDIA(46)，等效正常弹窗授权的持久化：
+                            // hasProjectionPermission 原逻辑依赖 AppOps noteOp==0 返回 true；
+                            // 仅 hook 返回 true 会让服务端实际权限仍 reject -> 投影无效 -> 反复重试
+                            grantProjectMediaAppOp(ctx, uid, pkg);
                         }
                         return result;
                     } catch (Throwable t) {
@@ -354,6 +358,30 @@ public final class AutoGrantHook {
 
         logI("injected content session: mode=" + modeName(rule.mode)
                 + " session=" + session.getClass().getSimpleName());
+    }
+
+    /**
+     * 授予 AppOps OP_PROJECT_MEDIA(46) = MODE_ALLOWED(0)（等效正常弹窗授权的持久化）。
+     *
+     * <p>hasProjectionPermission 原逻辑 = checkPermission(CAPTURE_VIDEO_OUTPUT) || noteOp(46)==0。
+     * 普通 App 无 CAPTURE_VIDEO_OUTPUT，只能靠 AppOps 46 allow。正常弹窗授权会
+     * mAppOps.setMode(46, uid, pkg, 0)；我们的免弹窗分支若不授予，服务端实际权限
+     * 仍 reject -> 投影无效/反复重试。</p>
+     */
+    private static void grantProjectMediaAppOp(android.content.Context ctx, int uid, String pkg) {
+        if (ctx == null || pkg == null || uid < 0) return;
+        try {
+            Object appOps = ctx.getSystemService(android.app.AppOpsManager.class);
+            if (appOps == null) return;
+            // 反编译确认：createProjectionInternal 里 mAppOps.setMode(46, uid, pkg, 0)
+            // （46 = OP_PROJECT_MEDIA，int 版本 + MODE_ALLOWED(0)）
+            android.app.AppOpsManager.class.getMethod("setMode",
+                            int.class, int.class, String.class, int.class)
+                    .invoke(appOps, 46, uid, pkg, 0);
+            logI("granted PROJECT_MEDIA AppOps: uid=" + uid + " pkg=" + pkg);
+        } catch (Throwable t) {
+            logW("grantProjectMediaAppOp failed: " + t);
+        }
     }
 
     private static Object findForegroundTask(String targetPkg) {
