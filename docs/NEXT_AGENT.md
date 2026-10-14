@@ -349,3 +349,52 @@ export GRADLE_USER_HOME=/opt/gradle-home
 - 修复：给 Rule 增加基于 appPkg/mode/targetPkg 的内容相等 equals()/hashCode()
 - 验证：UI 实测 2 条规则删除 1 条，仅目标被删、另一条保留；App 文件与 system 路径同步一致
 - 版本：提交数 54（v1.5.4 待构建发布）
+
+## [2026-10-14 16:59] 阶段7 多会话Hook 完成（v1.5.6，commit 30d19cd）
+
+### 需求与根因（日志实证）
+- 用户反馈：开启搜题酱悬浮窗 + 夸克悬浮窗搜题，使用其中一个截屏后另一个掉权限；再点搜题酱会崩溃。
+- 设备日志（modules_2026-10-14T15:11:27.256682.log）实证：
+  - 15:19:16 搜题酱发起投影 → `projection.stop: pkg=com.quark.browser`（夸克被 startProjectionLocked 顶掉）
+  - 15:21:58 夸克再点 → 搜题酱投影 stop（Binder death）→ 互踢循环
+  - 15:21:59 `projection.stop: pkg=com.zmzx.college.search` vdId=10（搜题酱最终崩）
+- 根因：ColorOS MediaProjectionManagerService **双轨单槽**——`mProjectionGrant` 只有一个 slot，
+  新 App 启动必然 `mProjectionGrant.stop()` 旧 App。被顶掉的旧 token 被 App 复用 → isValid() 失败
+  → SecurityException（未捕获 → 闪退）。
+
+### 实现（app/src/main/java/com/fairyxh/multiprojection/rule/MultiSessionHook.java，398 行）
+- **方案：平移出槽**（不接管原生核心逻辑，仅平移旧投影避免被 stop）
+  - `startProjectionLocked`：proceed() 前若已有 mProjectionGrant（非 oplus），先平移进多会话表
+    + 清空单槽字段 → 原生看到 null 不 stop 旧投影；proceed() 让新投影正常入槽 + dispatchStart；
+    再入表。
+  - `stopProjectionLocked`：proj==当前槽 → 走原生（清槽+dispatchStop）；否则是表内投影 →
+    只移除自己 + 反射 invokeDispatchStop（不连累当前槽）。
+  - `isCurrentProjection`：表内 token → true（否则表内投影 stop() 开头检查失败无法停止）。
+- 接入：Bootstrap.startForSystemServer 新增 MultiSessionHook.install（受
+  TemplateConfig.MULTI_SESSION_ENABLED 控制）。
+- 开关：**已默认开启 MULTI_SESSION_ENABLED=true**（用户明确需求多 App 同时录制）。
+- 构建：v1.5.6（versionCode 56），BUILD SUCCESSFUL 3m15s。
+- 已安装设备：pm install -r -d /data/local/tmp/mpfw156.apk → Success（versionName=1.5.6）。
+
+### ⚠️ 关键设计说明（勿踩坑）
+1. **不接管原生核心逻辑**：只平移旧投影 + 清空单槽字段，让原生 proceed() 正常入新槽。
+   这样 dispatchStart/dispatchStop/watcher 通知全部由原生完成，我们只维护"额外存活"的投影表。
+2. **表内投影停止**：原生 stopProjectionLocked 会无条件清空单槽字段（连累当前槽），
+   所以表内投影的 stop 必须自己处理：只移除自己 + dispatchStop。
+3. **oplus 录屏（com.oplus.screenrecorder）双轨不接管**：保持原生双轨语义，避免破坏录屏轨。
+4. **AutoGrantHook 兼容**：AutoGrantHook hook 的是 MediaProjection.start/stop（内部类）与
+   createProjectionInternal/hasProjectionPermission，MultiSessionHook hook 的是外层
+   startProjectionLocked/stopProjectionLocked/isCurrentProjection —— 调用链不同，不冲突。
+
+### ⏳ 待用户验证（需重启设备使 system_server 注入生效）
+1. 重启后 `grep -a 'MultiSession' /data/adb/lspd/log/modules_*.log` 应见 `MultiSessionHook installed`
+2. 打开夸克悬浮窗搜题 → 截屏成功；再开搜题酱悬浮窗 → 截屏成功，**夸克不掉权限**
+3. 两个同时录制 → 检查是否都出画面（受 SurfaceFlinger 限制，若同屏多路镜像不可行，
+   只验证"互不顶掉 + 各自可截屏"）
+4. 若互踢仍存在：查日志确认 `startProjectionLocked evict-pre` 是否触发
+
+### 已确认边界（如实记录）
+- Token/生命周期多会话 ✅ Java Hook 可控
+- WMS 侧 ContentRecordingController 仍是全局单 mSession，ContentRecorder 每 Display 单 surface
+- 不同 VD 的 session 不会互踢（反编译确认），但同一真实 Display 被多 VD 同时镜像
+  是否可行受 SurfaceFlinger 限制，需真机实测。
