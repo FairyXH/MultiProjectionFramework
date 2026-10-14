@@ -16,6 +16,7 @@ Android 15 / ColorOS 15 多路 MediaProjection 会话框架（LSPosed 模块）�
 |---|---|
 | `docs/VERIFICATION.md` | 完整验证流程（构建 → 安装 → 功能 → 回归） |
 | `docs/ADAPTATION.md` | 新设备适配指南（如何迁移到其他机型/系统） |
+| `docs/DETECTION_SURFACE.md` | 录制范围对 App 的检测面分析（单应用是否可被感知） |
 | `docs/ARCHITECTURE.md` | 端到端架构 |
 | `docs/HOOK_POINTS.md` | 已确认的 Hook 点 |
 | `docs/PROGRESS.md` | 阶段进度 |
