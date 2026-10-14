@@ -343,3 +343,9 @@ export GRADLE_USER_HOME=/opt/gradle-home
 - Release 已发布：https://github.com/FairyXH/MultiProjectionFramework/releases/tag/v1.5.1（含 MultiProjectionFramework-v1.5.1.apk，R8 压缩后 149KB）
 - 自动版本验证：提交数 51 → versionCode=51 → versionName=1.5.1（buildSrc 纯 Java 版生效）
 - 待用户验证：新 APK 安装后首页「隐藏桌面图标」功能（debug 版已装，release 版在 Release 资产）
+
+### [14:45] 修复：规则删除按钮点击无反应
+- 根因：RulesConfig.Rule 未实现 equals()/hashCode()，删除按钮 next.remove(rule) 用默认引用相等比较；rule 是列表构建时的旧引用，与重新 load() 的对象引用不同 → 永远匹配不上 → 看似无反应
+- 修复：给 Rule 增加基于 appPkg/mode/targetPkg 的内容相等 equals()/hashCode()
+- 验证：UI 实测 2 条规则删除 1 条，仅目标被删、另一条保留；App 文件与 system 路径同步一致
+- 版本：提交数 54（v1.5.4 待构建发布）
