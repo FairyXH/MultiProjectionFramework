@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">MultiProjection Framework</string>
-    <string name="xposed_description">Android 15 / ColorOS 15 多路 MediaProjection 会话框架（libxposed API 102，仅 system 与 com.android.systemui 作用域）。</string>
-    <string name="launcher_instructions">%1$s\n\n作用域：android（system_server）与 com.android.systemui。\n\n1. 在 LSPosed/Vector 中启用本模块。\n2. 选择作用域：Android 系统框架 + SystemUI。\n3. 重启后生效。\n\n当前首个目标：%2$s</string>
+    <string name="xposed_description">MediaProjection 多路投影会话框架（libxposed API 102，仅 system 与 com.android.systemui 作用域）。自动授权免弹窗、整屏/单应用录制范围控制。</string>
 </resources>

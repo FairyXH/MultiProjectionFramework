@@ -66,5 +66,4 @@ android {
 dependencies {
     // Vector 2.2 and LSPatch 1.2 provide libxposed API 102 at runtime. Keep the API out of the APK.
     compileOnly(libs.libxposed.api)
-    compileOnly(libs.androidx.annotation)
 }

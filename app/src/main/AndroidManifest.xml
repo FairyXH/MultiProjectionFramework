@@ -19,10 +19,6 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".ui.RulesActivity"
-            android:exported="false" />
-
         <provider
             android:name=".rule.RuleProvider"
             android:authorities="com.fairyxh.multiprojection.rule"

@@ -1,10 +1,8 @@
 [versions]
 agp = "9.1.1"
 libxposedApi = "102.0.0"
-androidxAnnotation = "1.10.0"
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 [libraries]
 # Latest stable libxposed API artifact on Maven Central. Use compileOnly; the framework supplies it at runtime.
 libxposed-api = { group = "io.github.libxposed", name = "api", version.ref = "libxposedApi" }
-androidx-annotation = { group = "androidx.annotation", name = "annotation", version.ref = "androidxAnnotation" }

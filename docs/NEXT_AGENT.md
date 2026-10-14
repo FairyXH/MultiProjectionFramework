@@ -283,3 +283,25 @@ export GRADLE_USER_HOME=/opt/gradle-home
 - 已停用 com.fairyxh.multiprojection（modules_state enabled=0）
 - 待重启：让 LSPosed 卸载模块注入，搜题酱走原始授权流程
 - 若原始流程正常 => MPFw hook 引入问题；若也循环 => 搜题酱+隐屏+ColorOS 本身
+
+## 阶段6d 隐屏模块 ac.no.screenshot 确定为最大嫌疑（2026-10-14 08:44）
+
+### 决定性实验（MPFw 停用 + AppOps default + 隐屏启用）
+- 用户重启后：手动点授权弹窗 -> 状态栏闪一下 -> 立即弹第二个弹窗 -> 无限循环
+- **纯原生手动授权流程也循环** => 彻底排除 MPFw hook 引入
+- 隐屏模块 ac.no.screenshot（一直启用，hook 搜题酱）成最大嫌疑
+
+### 隐屏模块机制（classes.dex strings 实证）
+- hook WindowManagerGlobal.addView / ViewRootImpl.setView / relayoutWindow
+- hook SurfaceControl.Transaction / findValidSurface
+- 字段：mSetSkipScreenshot / mSetSkipScreenshotLegacy / setSkipScreenshot
+- mSurface / mSurfaceControl / mSurfaceControlLocked / fSurface / fView / fWindowAttributes
+- 作用：搜题酱进程内拦截 addView，把匹配 protectedViews 的窗口标 setSkipScreenshot
+  -> 录屏时隐藏目标窗口
+- 这些 hook 点正是 MediaProjection 录屏管线 => 极可能破坏授权/录屏流程
+
+### 已执行：停用隐屏模块
+- 备份 db -> .bak_hidescreen
+- ac.no.screenshot enabled=0（MPFw 保持停用，AppOps default）
+- 待重启：搜题酱走完全纯净原生手动授权
+- 若不再循环 => 隐屏模块是根因；用户需在隐屏模块里排除搜题酱或改用其他隐屏方案
