@@ -45,7 +45,7 @@ public final class AboutTab {
         // 信息卡
         root.addView(iOSStyle.sectionTitle(c, "信息"));
         LinearLayout card1 = iOSStyle.card(c);
-        iOSStyle.addCell(card1, infoRow(c, "版本", "0.1.0"), false);
+        iOSStyle.addCell(card1, infoRow(c, "版本", com.fairyxh.multiprojection.BuildConfig.VERSION_NAME), false);
         iOSStyle.addCell(card1, infoRow(c, "框架", "libxposed API 102"), false);
         iOSStyle.addCell(card1, infoRow(c, "作用域", "android + com.android.systemui"), true);
         root.addView(card1);

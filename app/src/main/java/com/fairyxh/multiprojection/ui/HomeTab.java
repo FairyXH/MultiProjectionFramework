@@ -1,9 +1,12 @@
 package com.fairyxh.multiprojection.ui;
 
 import android.content.Context;
+import android.content.ComponentName;
+import android.content.pm.PackageManager;
 import android.graphics.Typeface;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -51,6 +54,10 @@ public final class HomeTab {
         addCapability(card2, "录制范围控制", "整屏 / 单应用-自身 / 单应用-自定义三种模式", false);
         addCapability(card2, "多投影会话", "深度改造 MediaProjection 会话链路，支持多路并行", true);
         root.addView(card2);
+
+        // —— 设置卡 ——
+        root.addView(iOSStyle.sectionTitle(c, "设置"));
+        root.addView(buildSettingsCard(c));
 
         // —— 快速开始卡 ——
         root.addView(iOSStyle.sectionTitle(c, "快速开始"));
@@ -102,5 +109,71 @@ public final class HomeTab {
         txt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         row.addView(txt);
         return row;
+    }
+
+    /**
+     * 设置卡：隐藏/恢复桌面图标。
+     * 通过 PackageManager.setComponentEnabledSetting 禁用 LauncherActivity
+     * 的 COMPONENT_ENABLED_STATE_DISABLED，桌面图标即消失；再次点击恢复。
+     */
+    private static LinearLayout buildSettingsCard(Context c) {
+        LinearLayout card = iOSStyle.card(c);
+
+        // 隐藏桌面图标行
+        LinearLayout hideRow = new LinearLayout(c);
+        hideRow.setOrientation(LinearLayout.HORIZONTAL);
+        hideRow.setGravity(Gravity.CENTER_VERTICAL);
+        int padV = iOSStyle.dp(c, 12);
+        hideRow.setPadding(0, padV, 0, padV);
+
+        TextView hideTitle = new TextView(c);
+        hideTitle.setText("隐藏桌面图标");
+        hideTitle.setTextColor(iOSStyle.TEXT);
+        hideTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        hideRow.addView(hideTitle, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView hideStatus = new TextView(c);
+        hideStatus.setTextColor(iOSStyle.ACCENT);
+        hideStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        hideStatus.setGravity(Gravity.RIGHT);
+        updateHideStatus(c, hideStatus);
+        hideRow.addView(hideStatus);
+        hideRow.setOnClickListener(v -> {
+            PackageManager pm = c.getPackageManager();
+            ComponentName cn = new ComponentName(c.getPackageName(),
+                    "com.fairyxh.multiprojection.ui.LauncherActivity");
+            int state = pm.getComponentEnabledSetting(cn);
+            int newState = state == PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                    ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                    : PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
+            pm.setComponentEnabledSetting(cn, newState, PackageManager.DONT_KILL_APP);
+            updateHideStatus(c, hideStatus);
+        });
+        hideRow.setClickable(true);
+        iOSStyle.addCell(card, hideRow, true);
+
+        // 隐藏后恢复提示
+        TextView tip = iOSStyle.cellDetail(c,
+                "隐藏后需通过模块管理器或重新安装 App 找回入口，恢复图标同样在此页面。");
+        tip.setPadding(0, iOSStyle.dp(c, 6), 0, iOSStyle.dp(c, 12));
+        iOSStyle.addCell(card, tip, true);
+        return card;
+    }
+
+    private static void updateHideStatus(Context c, TextView status) {
+        try {
+            PackageManager pm = c.getPackageManager();
+            ComponentName cn = new ComponentName(c.getPackageName(),
+                    "com.fairyxh.multiprojection.ui.LauncherActivity");
+            int state = pm.getComponentEnabledSetting(cn);
+            if (state == PackageManager.COMPONENT_ENABLED_STATE_DISABLED) {
+                status.setText("已隐藏 · 点击恢复");
+            } else {
+                status.setText("正常 · 点击隐藏");
+            }
+        } catch (Throwable t) {
+            status.setText("未知");
+        }
     }
 }

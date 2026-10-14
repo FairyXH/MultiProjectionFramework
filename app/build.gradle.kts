@@ -13,8 +13,10 @@ android {
         // Match Vector/LSPatch's Android 9 runtime floor; compileSdk is a build-time requirement.
         minSdk = 28
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        // 版本由 buildSrc GitVersion 插件基于 Git 提交次数自动计算（无需手动维护）
+        val autoVersion = GitVersion.getVersion()
+        versionName = autoVersion[0]
+        versionCode = autoVersion[1].toInt()
     }
     signingConfigs {
         create("releaseEnv") {
