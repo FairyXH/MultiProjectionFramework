@@ -68,6 +68,10 @@ public final class Bootstrap {
                 android.content.Context ctx = getSystemServerContext();
                 com.fairyxh.multiprojection.rule.AutoGrantHook.install(api, classLoader, ctx);
             }
+            // 阶段 7：多会话（多 App 同时录制，互不顶掉；高风险，默认关闭）
+            if (TemplateConfig.MULTI_SESSION_ENABLED) {
+                com.fairyxh.multiprojection.rule.MultiSessionHook.install(api, classLoader);
+            }
             if (TemplateConfig.VERBOSE_LOGS) {
                 Log.i(TemplateConfig.LOG_TAG, "Bootstrap started for system_server");
             }

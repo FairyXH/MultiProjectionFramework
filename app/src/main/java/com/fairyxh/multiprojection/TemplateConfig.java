@@ -56,8 +56,8 @@ public final class TemplateConfig {
     /** 诊断日志总开关（独立于 VERBOSE_LOGS，默认开启以支持阶段 5 只读诊断）。 */
     public static final boolean DIAGNOSTICS_ENABLED = true;
 
-    /** 多会话系统服务改造总开关（阶段 7 高风险功能，默认关闭，须显式开启）。 */
-    public static final boolean MULTI_SESSION_ENABLED = false;
+    /** 多会话系统服务改造总开关（阶段 7：多 App 同时录制整屏/单应用，互不顶掉；高优先级实验功能）。 */
+    public static final boolean MULTI_SESSION_ENABLED = true;
 
     /** SystemUI 录制范围选择增强（阶段 6，验证期默认开启；正式发布前可改回 false 由悬浮菜单控制）。 */
     public static final boolean RANGE_CHOICE_ENHANCED = true;
