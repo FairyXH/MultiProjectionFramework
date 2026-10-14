@@ -395,12 +395,22 @@ public final class AutoGrantHook {
                 logW("grantProjectMediaAppOp: appOps null");
                 return;
             }
-            // 反编译确认：createProjectionInternal 里 mAppOps.setMode(46, uid, pkg, 0)
-            // （46 = OP_PROJECT_MEDIA，int 版本 + MODE_ALLOWED(0)）
-            android.app.AppOpsManager.class.getMethod("setMode",
-                            int.class, int.class, String.class, int.class)
-                    .invoke(appOps, 46, uid, pkg, 0);
-            logI("granted PROJECT_MEDIA AppOps: uid=" + uid + " pkg=" + pkg);
+            // 【关键】必须 clearCallingIdentity：
+            // hook 回调里 Binder.getCallingUid() 泄漏为 SystemUI(如10216)，
+            // setMode 内部 enforcePermission(MANAGE_APP_OPS_MODES) 会 SecurityException。
+            // 反编译 createProjectionInternal(452行) 里正常路径也是 Binder.clearCallingIdentity
+            // 包裹后才 mAppOps.setMode(46, uid, pkg, 0)。
+            long identity = android.os.Binder.clearCallingIdentity();
+            try {
+                // 反编译确认：createProjectionInternal 里 mAppOps.setMode(46, uid, pkg, 0)
+                // （46 = OP_PROJECT_MEDIA，int 版本 + MODE_ALLOWED(0)）
+                android.app.AppOpsManager.class.getMethod("setMode",
+                                int.class, int.class, String.class, int.class)
+                        .invoke(appOps, 46, uid, pkg, 0);
+                logI("granted PROJECT_MEDIA AppOps: uid=" + uid + " pkg=" + pkg);
+            } finally {
+                android.os.Binder.restoreCallingIdentity(identity);
+            }
         } catch (Throwable t) {
             logW("grantProjectMediaAppOp failed: " + t + " cause=" + t.getCause());
         }
