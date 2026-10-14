@@ -321,3 +321,17 @@ export GRADLE_USER_HOME=/opt/gradle-home
 ### 待办
 - 用户验证新 UI（打开 MPFw App 看首页/规则/原理/关于 4 Tab）
 - 确认规则增删改功能正常（RulesTab 复用 RulesConfig 数据层）
+
+### [11:19] 修复 LauncherActivity 启动崩溃
+- 根因：HomeTab.java 中 card2 重复 addView（先 root.addView(card2) 后 root.addView(card2)）
+  → IllegalStateException: The specified child already has a parent
+- 修复：删除第一次提前 addView，已提交并部署 MPFw-ui-fix.apk（pm install Success）
+
+### [11:50] 集成版权图标 + 自动版本 + 隐藏图标 + 文档
+- 从 FairyXH-Android-Copyright 复制 logo 图标（6 密度）到 mipmap-ic_launcher，Manifest 改用 @mipmap/ic_launcher
+- 引入 buildSrc 自动版本插件：**纯 Java 实现 GitVersion.java**（Kotlin 版会触发 kotlin-gradle-plugin 下载导致离线失败）；基于 Git 提交次数 → versionCode，与 version.properties 取 max；构建后自动生成/更新 version.properties（**必须提交入库防回退**）
+- AboutTab 版本改动态读 BuildConfig.VERSION_NAME
+- 首页新增「设置」卡：隐藏/恢复桌面图标（setComponentEnabledSetting 禁用/启用 LauncherActivity）
+- 新增 docs/VERIFICATION.md（验证流程）与 docs/ADAPTATION.md（新设备适配指南）
+- README 增加文档索引 + 版本机制说明
+- 下一项：创建 GitHub 仓库并 push + 发 release（见 NEXT_AGENT 任务清单）

@@ -11,8 +11,21 @@ Android 15 / ColorOS 15 多路 MediaProjection 会话框架（LSPosed 模块）�
 ## 开发环境
 见 `docs/ENVIRONMENT.md`（构建命令、工具链、aapt2 wrapper 等）。
 
-## 状态与接力
-见 `docs/PROGRESS.md`、`docs/NEXT_AGENT.md`。
+## 文档索引
+| 文档 | 说明 |
+|---|---|
+| `docs/VERIFICATION.md` | 完整验证流程（构建 → 安装 → 功能 → 回归） |
+| `docs/ADAPTATION.md` | 新设备适配指南（如何迁移到其他机型/系统） |
+| `docs/ARCHITECTURE.md` | 端到端架构 |
+| `docs/HOOK_POINTS.md` | 已确认的 Hook 点 |
+| `docs/PROGRESS.md` | 阶段进度 |
+| `docs/NEXT_AGENT.md` | Agent 接力文档 |
+
+## 版本机制
+版本由 `buildSrc/GitVersion.java` 基于 Git 提交次数自动计算（无需手动维护）：
+- `versionCode` = Git 提交次数（与 `version.properties` 历史最高取 max，不回退）
+- `versionName` 从 1.0.0 开始，每一位满 10 进位
+- 无 Git 环境时基于 `version.properties` +1
 
 ## 构建
 ```bash
