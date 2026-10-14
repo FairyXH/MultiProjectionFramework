@@ -48,6 +48,27 @@ public final class RulesConfig {
             this.mode = mode;
             this.targetPkg = targetPkg;
         }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof Rule)) return false;
+            Rule r = (Rule) o;
+            return mode == r.mode
+                    && java.util.Objects.equals(appPkg, r.appPkg)
+                    && java.util.Objects.equals(targetPkg, r.targetPkg);
+        }
+
+        @Override
+        public int hashCode() {
+            return java.util.Objects.hash(appPkg, mode, targetPkg);
+        }
+
+        @Override
+        public String toString() {
+            return "Rule{" + appPkg + ", mode=" + mode
+                    + (targetPkg != null ? ", target=" + targetPkg : "") + "}";
+        }
     }
 
     private RulesConfig() {}

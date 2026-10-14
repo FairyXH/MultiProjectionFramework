@@ -126,6 +126,8 @@ public final class RulesTab {
         del.setOnClickListener(v -> {
             List<RulesConfig.Rule> all = RulesConfig.load(ctx.getFilesDir());
             List<RulesConfig.Rule> next = new ArrayList<>(all);
+            // 按内容相等（equals）定位要删除的规则；同一规则（同 appPkg+mode+target）
+            // 重复出现时只删第一处，语义上等价于“删掉这条”。
             next.remove(rule);
             persistRules(next);
             refreshList();
