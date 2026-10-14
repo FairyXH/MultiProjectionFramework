@@ -356,6 +356,20 @@ public final class AutoGrantHook {
         sessionField.setAccessible(true);
         sessionField.set(projection, session);
 
+        // 【关键】把 session 设为 waitingForConsent=true，模拟"授权页等待用户同意"状态。
+        // 免弹窗分支（hasProjectionPermission=true）SystemUI 会走 finish(1, proj) ->
+        // setUserReviewGrantedConsentResult(1) -> 405行 mSession.isWaitingForConsent()
+        // 检查通过 -> setReviewedConsentSessionLocked(createDisplaySession(0)) ->
+        // 系统完整设置 session（waitingForConsent=false + VD id + setContentRecordingSession）
+        // -> WMS 录制正常，搜题酱截图成功，不再循环。
+        // 若保持 waitingForConsent=false，405行检查失败 -> "Ignore consent result" ->
+        // session 永不设置 -> WMS 无录制会话 -> 搜题酱截图失败重试（闪烁循环）。
+        try {
+            session.getClass().getMethod("setWaitingForConsent", boolean.class).invoke(session, true);
+        } catch (Throwable t) {
+            logW("setWaitingForConsent(true) failed: " + t);
+        }
+
         logI("injected content session: mode=" + modeName(rule.mode)
                 + " session=" + session.getClass().getSimpleName());
     }

@@ -256,3 +256,30 @@ export GRADLE_USER_HOME=/opt/gradle-home
 ### 待重启验证
 - 预期：搜题酱首次授权后 AppOps 46=allow，投影一次成功、不闪烁、不闪退
 - 若仍有问题：查 AppOps 授予是否成功（日志 granted PROJECT_MEDIA AppOps）
+
+## 阶段6c A/B 基线测试：停用 MPFw 模块（2026-10-14 08:10）
+
+### 关键判别数据（第六次重启，07:34 启动 system_server）
+- AppOps PROJECT_MEDIA：重启后仍 allow（22:33 手动授予持久化，+3m53s ago）
+- **但循环依旧**（vdId 29->33 连续递增）=> AppOps 不是唯一根因！
+- grantProjectMediaAppOp failed: InvocationTargetException
+  cause=SecurityException: uid 10216 does not have android.permission.MANAGE_APP_OPS_MODES
+  => hook 回调里 Binder.getCallingUid() 泄漏为 SystemUI(10216)，setMode 被拒
+- 修复（commit 21c6928 已部署 08:06）：setMode 前 Binder.clearCallingIdentity
+
+### 循环机制（重估）
+- 每次 auto-grant hit -> 注入 session -> start OK -> 0.1-0.5s 后 stop -> 再 auto-grant
+- stop caller 两种：搜题酱主动(execTransactInternal) + 服务端顶替(HookBridge)
+- vdId 连续递增：每次新建 VD（notifyVirtualDisplayCreated 成功调 setContentRecordingSession）
+- 用户：搜题酱界面内点悬浮窗->通知栏闪烁->回桌面才能截图；再点->闪退
+- 用户：搜题酱开启隐屏模块 ac.no.screenshot（scope 确认 hook 搜题酱）
+
+### 疑点："回桌面才能截图"
+- 可能 ColorOS 整屏录制不允许录自己前台？或隐屏模块影响前台判定？
+- 用户说传统手动授权不冲突（可用）=> 原始授权流程正常
+
+### 当前状态：A/B 基线测试进行中
+- 已备份 modules_config.db -> .bak_autogrant
+- 已停用 com.fairyxh.multiprojection（modules_state enabled=0）
+- 待重启：让 LSPosed 卸载模块注入，搜题酱走原始授权流程
+- 若原始流程正常 => MPFw hook 引入问题；若也循环 => 搜题酱+隐屏+ColorOS 本身
