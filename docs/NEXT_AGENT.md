@@ -335,3 +335,11 @@ export GRADLE_USER_HOME=/opt/gradle-home
 - 新增 docs/VERIFICATION.md（验证流程）与 docs/ADAPTATION.md（新设备适配指南）
 - README 增加文档索引 + 版本机制说明
 - 下一项：创建 GitHub 仓库并 push + 发 release（见 NEXT_AGENT 任务清单）
+
+### [12:00] 发布完成：push + Release v1.5.1
+- 创建 GitHub 仓库 FairyXH/MultiProjectionFramework（public），origin 已从模板改为本仓库
+- **注意**：OAuth token 无 workflow 权限，已删除模板 .github/workflows/android.yml（否则 push 被拒）；后续如需 CI 须用带 workflow scope 的 token 重新加回
+- 代码已全部 push（HEAD=4941da5），tag v1.5.1 已推
+- Release 已发布：https://github.com/FairyXH/MultiProjectionFramework/releases/tag/v1.5.1（含 MultiProjectionFramework-v1.5.1.apk，R8 压缩后 149KB）
+- 自动版本验证：提交数 51 → versionCode=51 → versionName=1.5.1（buildSrc 纯 Java 版生效）
+- 待用户验证：新 APK 安装后首页「隐藏桌面图标」功能（debug 版已装，release 版在 Release 资产）
