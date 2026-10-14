@@ -305,3 +305,19 @@ export GRADLE_USER_HOME=/opt/gradle-home
 - ac.no.screenshot enabled=0（MPFw 保持停用，AppOps default）
 - 待重启：搜题酱走完全纯净原生手动授权
 - 若不再循环 => 隐屏模块是根因；用户需在隐屏模块里排除搜题酱或改用其他隐屏方案
+
+## [2026-10-14 11:15] UI 重构完成（iOS 风格 + 底栏）
+
+- **已提交**：`2b3d8e8`（feat: 重设计模块 App 页面为 iOS 风格 + 底栏 4 Tab）
+- **新 APK 已部署**：`MPFw-ui.apk`（pm install -r -d 成功，含全部 6 个新 UI 类）
+- **UI 无需重启即可验证**：直接打开 MPFw App（LauncherActivity）即可看到新界面
+- **构建关键经验（重要）**：aapt2 daemon 启动失败不是内存问题，而是 proot 下直接 exec x86_64 aapt2 会 SIGILL。
+  必须使用 `/opt/aapt2wrap/aapt2`（qemu-amd64-static wrapper）。gradle.properties 中：
+  `android.aapt2FromMavenOverride=/opt/aapt2wrap/aapt2`
+- **新 UI 结构**：ui/iOSStyle.java + HomeTab/RulesTab/PrinciplesTab/AboutTab + LauncherActivity（4 Tab 底栏）
+- **已删除**：旧 RulesActivity.java（Manifest 已同步移除）
+- **已验证**：APK classes4.dex 含全部新类，构建成功，安装成功
+
+### 待办
+- 用户验证新 UI（打开 MPFw App 看首页/规则/原理/关于 4 Tab）
+- 确认规则增删改功能正常（RulesTab 复用 RulesConfig 数据层）

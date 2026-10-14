@@ -47,7 +47,6 @@ public final class HomeTab {
         // —— 核心能力卡 ——
         root.addView(iOSStyle.sectionTitle(c, "核心能力"));
         LinearLayout card2 = iOSStyle.card(c);
-        root.addView(card2);
         addCapability(card2, "自动授权", "规则内 App 发起录屏/投屏时自动授权，不再弹窗", false);
         addCapability(card2, "录制范围控制", "整屏 / 单应用-自身 / 单应用-自定义三种模式", false);
         addCapability(card2, "多投影会话", "深度改造 MediaProjection 会话链路，支持多路并行", true);
