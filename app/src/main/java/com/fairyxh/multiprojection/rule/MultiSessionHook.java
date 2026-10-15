@@ -126,7 +126,7 @@ public final class MultiSessionHook {
                 .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
                 .intercept(chain -> onStopProjectionLocked(chain, projection));
 
-        // ---- 3. isCurrentProjection：表内 token → true（否则表内投影无法停止） ----
+        // ---- 3. isCurrentProjection：表内 token 且未停止（mToken!=null）→ true ----
         final Method isCurrent = serverCls.getDeclaredMethod("isCurrentProjection", IBinder.class);
         isCurrent.setAccessible(true);
         sApi.hook(isCurrent)
@@ -137,7 +137,7 @@ public final class MultiSessionHook {
                         Object[] args = chain.getArgs() == null ? null : chain.getArgs().toArray();
                         if (args != null && args.length > 0 && args[0] instanceof IBinder) {
                             IBinder token = (IBinder) args[0];
-                            if (sTable.containsKey(token)) {
+                            if (isActiveInTable(token)) {
                                 return Boolean.TRUE;
                             }
                         }
@@ -148,7 +148,29 @@ public final class MultiSessionHook {
                     }
                 });
 
-        logI("MultiSessionHook installed (3 core hooks)");
+        // ---- 4. MediaProjection.stop：二次 stop 防护（mToken==null 直接返回，避免 NPE）----
+        final Method mpStop = projection.getDeclaredMethod("stop");
+        mpStop.setAccessible(true);
+        sApi.hook(mpStop)
+                .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                .intercept(chain -> {
+                    try {
+                        Object thiz = chain.getThisObject();
+                        Object token = readField(thiz, "mToken");
+                        if (token == null) {
+                            // 已 stop 过的投影再次 stop：原生会 unlinkToDeath(null) NPE。
+                            // 多会话下 isCurrentProjection 可能仍返回 true（表内残留），
+                            // 这里直接短路，避免夸克 onUnbind 二次 stop 崩溃。
+                            logI("stop() called on already-stopped projection (mToken=null) - short-circuit");
+                            return null;
+                        }
+                    } catch (Throwable t) {
+                        logW("stop guard failed: " + t);
+                    }
+                    return chain.proceed();
+                });
+
+        logI("MultiSessionHook installed (4 core hooks)");
     }
 
     // ---- 核心处理器（用 Object chain 参数，避免编译依赖非公开 HookCallback 类型） ----
@@ -164,8 +186,10 @@ public final class MultiSessionHook {
                 return proceed(chain); // oplus 录屏双轨不接管
             }
 
-            // 1. 若已有当前投影（非 oplus），先平移出槽并暂时清空单槽字段，避免原生 stop
-            Object svc = outerService(chain);
+            // 1. 若已有当前投影（非 oplus），先平移出槽并暂时清空单槽字段，避免原生 stop。
+            //    startProjectionLocked 的 this 就是 MediaProjectionManagerService 本身（不是内部类），
+            //    直接 getThisObject() 即为 service 实例。
+            Object svc = chainThis(chain);
             if (svc != null) {
                 Object old = readField(svc, "mProjectionGrant");
                 if (old != null && old != proj && !"com.oplus.screenrecorder".equals(pkgOf(old))) {
@@ -203,10 +227,20 @@ public final class MultiSessionHook {
                 return proceed(chain);
             }
 
-            Object svc = outerService(chain);
+            Object svc = chainThis(chain);
             boolean isCurrent = svc != null && readField(svc, "mProjectionGrant") == proj;
             if (!isCurrent) {
-                // 表内投影停止：只移除自己 + dispatchStop，不连累当前槽
+                // 表内投影停止：只移除自己 + dispatchStop，不连累当前槽。
+                // 【关键】必须同时清空单槽字段中属于该投影的残留：
+                // 如果 mProjectionToken == proj.asBinder()（该投影曾是最新/当前槽，后被平移），
+                // 不清空会导致 isCurrentProjection 永远 true -> 二次 stop NPE（夸克崩溃根因）。
+                IBinder token = asBinderOf(proj);
+                if (token != null) {
+                    Object curToken = readField(svc, "mProjectionToken");
+                    if (token.equals(curToken)) {
+                        writeField(svc, "mProjectionToken", null);
+                    }
+                }
                 removeFromTable(proj);
                 invokeDispatchStop(chain, svc, proj);
                 logI("stopProjectionLocked multi: pkg=" + pkg
@@ -226,6 +260,24 @@ public final class MultiSessionHook {
 
     // ---- 反射辅助 ----
 
+    /** 取 hook 回调的 this（即被 hook 方法所属实例）。 */
+    private static Object chainThis(Object chain) {
+        try {
+            return chain.getClass().getMethod("getThisObject").invoke(chain);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 表内 token 且投影未停止（mToken != null）才算活跃。 */
+    private static boolean isActiveInTable(IBinder token) {
+        Object proj = sTable.get(token);
+        if (proj == null) return false;
+        Object mToken = readField(proj, "mToken");
+        return mToken != null;
+    }
+
+    /** 取 hook 回调第 1 个参数（投影实例）。 */
     private static Object chainArg0(Object chain) {
         try {
             Object[] args = chainArgs(chain);
@@ -252,25 +304,6 @@ public final class MultiSessionHook {
         } catch (Throwable t) {
             throw new RuntimeException("proceed failed", t);
         }
-    }
-
-    /** 从 hook 回调 this 反射取外层 MediaProjectionManagerService 实例。 */
-    private static Object outerService(Object chain) {
-        try {
-            Object thiz = chain.getClass().getMethod("getThisObject").invoke(chain);
-            if (thiz == null) return null;
-            for (Class<?> c = thiz.getClass(); c != null; c = c.getSuperclass()) {
-                try {
-                    Field f = c.getDeclaredField("this$0");
-                    f.setAccessible(true);
-                    Object svc = f.get(thiz);
-                    if (svc != null) return svc;
-                } catch (NoSuchFieldException ignored) {
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        return null;
     }
 
     private static Object readField(Object target, String name) {
@@ -338,7 +371,7 @@ public final class MultiSessionHook {
     private static void invokeDispatchStop(Object chain, Object svc, Object proj) {
         try {
             if (svc == null) {
-                svc = outerService(chain);
+                svc = chainThis(chain);
             }
             if (svc == null) return;
             Method m = null;
