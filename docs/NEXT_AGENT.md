@@ -398,3 +398,41 @@ export GRADLE_USER_HOME=/opt/gradle-home
 - WMS 侧 ContentRecordingController 仍是全局单 mSession，ContentRecorder 每 Display 单 surface
 - 不同 VD 的 session 不会互踢（反编译确认），但同一真实 Display 被多 VD 同时镜像
   是否可行受 SurfaceFlinger 限制，需真机实测。
+
+## [2026-10-15 09:30] v1.5.8 修复：互踢未真正生效 + 夸克二次stop崩溃（commit d8e4ede）
+
+### 用户反馈（2026-10-14 22:26）
+- "这次确实不互相挤掉了"（互踢改善），但状态栏出现崩溃通知：夸克 `com.quark.browser` 崩溃。
+
+### 日志实证（modules_2026-10-14T21:29:03.308673.log）
+- 22:24:24 搜题酱 start 时：`projection.stop: pkg=com.quark.browser` 仍由
+  `startProjectionLocked(MediaProjectionManagerService.java:349)` 触发 → **互踢其实还在**
+  （我上一版的 evict-pre 从未出现在日志 → 平移逻辑从未执行）
+- 22:25:30.007 夸克崩溃：`FATAL EXCEPTION: main`
+  `Unable to unbind AnswerAssistService → MediaProjection.stop() → NPE unlinkToDeath on null`
+  栈顶经 `AutoGrantHook.java:221 proceed`
+
+### 根因（两层）
+1. **outerService() 缺陷**：`startProjectionLocked`/`stopProjectionLocked` 的 this 就是
+   `MediaProjectionManagerService` 本身（非内部类），`outerService()` 找 `this$0` 永远返回 null
+   → 平移出槽从不执行 → 互踢依旧。
+2. **isCurrentProjection 无条件 true**：表内 token 永远判活跃 → 同一投影被反复 stop()，
+   第一次 stop 已 `mToken=null`，第二次 `this.mToken.unlinkToDeath(this.mDeathEater)` NPE。
+
+### 修复（app/src/main/java/com/fairyxh/multiprojection/rule/MultiSessionHook.java，431 行）
+- 新增 `chainThis()`：直接 `getThisObject()` 取 service 实例，替代有缺陷的 `outerService()`。
+- `onStartProjectionLocked`：改用 chainThis 读/写单槽字段 → 平移出槽真正生效。
+- `isActiveInTable(token)`：表内 token **且投影未停止（mToken!=null）** 才返回 true。
+- 新增第 4 hook：`MediaProjection.stop()` 二次防护 —— mToken==null 直接短路返回，避免 NPE。
+- `onStopProjectionLocked` 表内投影停止时：同步清空 mProjectionToken 残留（防 isCurrentProjection 永 true）。
+
+### 验证
+- 构建：v1.5.8（versionCode 58）BUILD SUCCESSFUL
+- 已安装：pm install -r -d /data/local/tmp/mpfw157.apk → Success（versionName=1.5.8）
+- commit d8e4ede
+
+### ⏳ 待用户重启验证
+1. 重启后 `grep -a 'evict-pre' /data/adb/lspd/log/modules_*.log` 应见
+   `startProjectionLocked evict-pre: pkg=... moved to multi table`（此前从未出现）
+2. 夸克/搜题酱互开 → 两者都不掉权限、不崩溃
+3. 若仍崩溃：查 `stop() called on already-stopped projection` 是否出现（二次防护命中）
