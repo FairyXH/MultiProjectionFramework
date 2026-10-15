@@ -187,18 +187,31 @@ public final class MultiSessionHook {
             }
 
             // 1. 若已有当前投影（非 oplus），先平移出槽并暂时清空单槽字段，避免原生 stop。
-            //    startProjectionLocked 的 this 就是 MediaProjectionManagerService 本身（不是内部类），
-            //    直接 getThisObject() 即为 service 实例。
-            Object svc = chainThis(chain);
+            //    【关键】从 proj（MediaProjection 内部类）反射取 this$0 外层 service，
+            //    不依赖 hook 回调的 getThisObject（对 Nest$ 方法可能返回 null）。
+            Object svc = outerService(proj);
             if (svc != null) {
                 Object old = readField(svc, "mProjectionGrant");
                 if (old != null && old != proj && !"com.oplus.screenrecorder".equals(pkgOf(old))) {
-                    addToTable(old);
-                    // 清空单槽字段：原生 startProjectionLocked 看到 null 就不 stop 旧投影
-                    writeField(svc, "mProjectionGrant", null);
-                    writeField(svc, "mProjectionToken", null);
-                    logI("startProjectionLocked evict-pre: pkg=" + pkgOf(old)
-                            + " moved to multi table (table=" + sTable.size() + ")");
+                    Object oldToken = readField(old, "mToken");
+                    if (oldToken == null) {
+                        // 旧投影已死（mToken=null）：直接清残留字段 + 移除表，
+                        // 否则原生 start 195 行 mProjectionGrant.stop() 二次 stop → NPE
+                        removeFromTable(old);
+                        writeField(svc, "mProjectionGrant", null);
+                        writeField(svc, "mProjectionToken", null);
+                        logI("startProjectionLocked drop-dead: pkg=" + pkgOf(old)
+                                + " (mToken=null) cleared, table=" + sTable.size());
+                    } else {
+                        // 旧投影仍活跃：平移出槽 + 模拟停止（mToken=null），
+                        // 原生 start 195 行 stop() 会命中第4 hook 短路 → 不 NPE
+                        addToTable(old);
+                        writeField(old, "mToken", null);
+                        writeField(svc, "mProjectionGrant", null);
+                        writeField(svc, "mProjectionToken", null);
+                        logI("startProjectionLocked evict-pre: pkg=" + pkgOf(old)
+                                + " moved to multi table (mToken=null, table=" + sTable.size() + ")");
+                    }
                 }
             }
 
@@ -227,7 +240,9 @@ public final class MultiSessionHook {
                 return proceed(chain);
             }
 
-            Object svc = chainThis(chain);
+            // 【关键】从 proj（MediaProjection 内部类）反射取 this$0 外层 service，
+            // 不依赖 hook 回调的 getThisObject（对 Nest$ 方法可能返回 null）。
+            Object svc = outerService(proj);
             boolean isCurrent = svc != null && readField(svc, "mProjectionGrant") == proj;
             if (!isCurrent) {
                 // 表内投影停止：只移除自己 + dispatchStop，不连累当前槽。
@@ -235,10 +250,11 @@ public final class MultiSessionHook {
                 // 如果 mProjectionToken == proj.asBinder()（该投影曾是最新/当前槽，后被平移），
                 // 不清空会导致 isCurrentProjection 永远 true -> 二次 stop NPE（夸克崩溃根因）。
                 IBinder token = asBinderOf(proj);
-                if (token != null) {
+                if (token != null && svc != null) {
                     Object curToken = readField(svc, "mProjectionToken");
                     if (token.equals(curToken)) {
                         writeField(svc, "mProjectionToken", null);
+                        writeField(svc, "mProjectionGrant", null);
                     }
                 }
                 removeFromTable(proj);
@@ -259,6 +275,25 @@ public final class MultiSessionHook {
     }
 
     // ---- 反射辅助 ----
+
+    /** 从 MediaProjection 内部类实例反射取外层 MediaProjectionManagerService（this$0 字段）。 */
+    private static Object outerService(Object proj) {
+        if (proj == null) return null;
+        try {
+            for (Class<?> c = proj.getClass(); c != null; c = c.getSuperclass()) {
+                try {
+                    Field f = c.getDeclaredField("this$0");
+                    f.setAccessible(true);
+                    Object svc = f.get(proj);
+                    if (svc != null) return svc;
+                } catch (NoSuchFieldException ignored) {
+                }
+            }
+        } catch (Throwable t) {
+            logW("outerService failed: " + t);
+        }
+        return null;
+    }
 
     /** 取 hook 回调的 this（即被 hook 方法所属实例）。 */
     private static Object chainThis(Object chain) {
@@ -372,6 +407,9 @@ public final class MultiSessionHook {
         try {
             if (svc == null) {
                 svc = chainThis(chain);
+            }
+            if (svc == null) {
+                svc = outerService(proj);
             }
             if (svc == null) return;
             Method m = null;
